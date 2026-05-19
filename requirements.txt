@@ -1,0 +1,8 @@
+rich
+prompt_toolkit
+pyyaml
+jinja2
+requests
+python-nmap
+pyyaml
+dnspython

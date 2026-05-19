@@ -1,0 +1,6 @@
+apis:
+  censys:
+    personal_access_token: "censys_j47AKC8M_tecXpYiTW777naMyK8f6N4u2"
+
+  shodan:
+    use_internetdb: true

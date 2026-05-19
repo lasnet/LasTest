@@ -1,0 +1,37 @@
+healthcheck:
+  # Host used only to verify that the SOCKS5 proxy can establish TCP connections.
+  target_host: "1.1.1.1"
+  # Port used only for proxy health-check, not for the actual Nmap target scan.
+  target_port: 443
+  # Timeout for proxy health-check in seconds.
+  timeout_sec: 2
+  # Extra sanity check: proxy must NOT report success on this closed port.
+  negative_check_enabled: true
+  # Host for the closed-port sanity check.
+  closed_target_host: "1.1.1.1"
+  # Port expected to be closed; if proxy returns success here, it is rejected.
+  closed_target_port: 65535
+
+selection:
+  # first_alive  -> always start from the first alive proxy in the checked pool
+  # round_robin  -> rotate across alive proxies between attempts
+  # random       -> pick a random alive proxy for each attempt
+  strategy: "random"
+
+scan:
+  # How many successful proxied scans must be collected for one target.
+  # In the current proxied Nmap flow this also defines the parallel batch size.
+  successful_attempts_required: 5
+  # Reserved compatibility setting.
+  # Currently not used by the proxied full-port Nmap workflow.
+  max_retries_per_target: 3
+  # Hard timeout for one individual proxied Nmap subprocess.
+  timeout_sec: 600
+
+proxychains:
+  # Resolve DNS through proxychains.
+  proxy_dns: true
+  # Per-connection timeout inside proxychains for one proxied socket connect.
+  tcp_connect_time_out_ms: 2000
+  # Per-connection read timeout inside proxychains.
+  tcp_read_time_out_ms: 3000
