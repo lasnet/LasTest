@@ -9,47 +9,34 @@ const state = {
 const demoProject = {
   project: {
     name: "example.com",
-    client: "External Pentest Project",
-    description: "External Pentest Project",
-    created_at: "today",
+    client: "Analyst",
+    description: "External penetration test assessment overview and insights.",
   },
   scope: {
-    domains: ["example.com", "corp.example.com", "api.example.com"],
-    ips: [
-      "203.0.113.10",
-      "203.0.113.11",
-      "203.0.113.12",
-      "203.0.113.13",
-      "203.0.113.14",
-      "203.0.113.15",
-      "203.0.113.16",
-      "203.0.113.17",
-      "203.0.113.18",
-      "203.0.113.19",
-      "203.0.113.20",
-      "203.0.113.21",
-    ],
+    domains: ["example.com", "api.example.com"],
+    ips: ["93.184.216.34", "203.0.113.14", "203.0.113.28"],
     exclusions: ["legacy.example.com", "10.0.0.0/8"],
   },
 };
 
-const demoFindings = [
-  ["critical", "Exposed admin panel", "admin.example.com", "Open"],
-  ["high", "TLS weak cipher suite", "vpn.example.com", "In review"],
-  ["high", "Directory listing enabled", "static.example.com", "Open"],
-  ["medium", "Missing security headers", "www.example.com", "Accepted"],
-  ["low", "Verbose server banner", "mail.example.com", "Triaged"],
+const demoScans = [
+  ["Full Scan", "May 12, 2025  13:45 UTC", "completed"],
+  ["Web App Scan", "May 11, 2025  22:31 UTC", "completed"],
+  ["API Scan", "May 12, 2025  14:28 UTC", "running"],
+  ["Network Scan", "May 10, 2025  18:05 UTC", "scheduled"],
+  ["Subdomain Enum", "May 12, 2025  12:02 UTC", "completed"],
 ];
 
-const demoLog = [
-  "[14:32:01] Starting subfinder for example.com",
-  "[14:32:14] Found 421 subdomains",
-  "[14:33:02] Running httpx probe",
-  "[14:34:45] Alive hosts: 231",
-  "[14:35:00] Starting nuclei templates",
-].join("\n");
+const demoActivity = [
+  ["14:31:55", "[OK]", "Scan completed", "Full Scan", "34 hosts", "7m 42s", "0 critical, 2 high", "ok", "green"],
+  ["14:28:11", "[~]", "Scan started", "API Scan", "-", "-", "in progress", "warn", "yellow"],
+  ["14:25:03", "[!]", "High severity finding", "SQL Injection", "api.example.com", "/v1/users", "High", "danger", "red"],
+  ["14:22:47", "[OK]", "Asset added", "93.184.216.34", "-", "-", "New host discovered", "ok", "green"],
+  ["14:18:33", "[i]", "Subdomain discovered", "api-staging.example.com", "-", "-", "New subdomain", "info-text", "green"],
+];
 
 const qs = (selector) => document.querySelector(selector);
+const qsa = (selector) => Array.from(document.querySelectorAll(selector));
 
 function esc(value) {
   return String(value ?? "")
@@ -77,11 +64,30 @@ function showNotice(message) {
   }, 4600);
 }
 
-function setApiStatus(label, tone = "waiting") {
-  const el = qs("#api-status");
-  el.textContent = label;
-  el.style.color =
-    tone === "ok" ? "var(--green)" : tone === "error" ? "var(--red)" : "var(--yellow)";
+function detail() {
+  return state.projectDetail || demoProject;
+}
+
+function currentScope() {
+  return detail().scope || {};
+}
+
+function currentProjectName() {
+  const scope = currentScope();
+  return detail().project?.name || scope.domains?.[0] || "example.com";
+}
+
+function subtitle() {
+  const project = detail().project || {};
+  return (
+    project.description ||
+    project.client ||
+    "External penetration test assessment overview and insights."
+  );
+}
+
+function isRealProject() {
+  return Boolean(state.projectDetail);
 }
 
 async function api(path, options = {}) {
@@ -95,15 +101,16 @@ async function api(path, options = {}) {
 
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    let detail = response.statusText;
+    let detailText = response.statusText;
     try {
       const data = await response.json();
-      detail = data.detail || detail;
+      detailText = data.detail || detailText;
     } catch (_) {
-      detail = await response.text();
+      detailText = await response.text();
     }
-    throw new Error(detail);
+    throw new Error(detailText);
   }
+
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) {
     return response.json();
@@ -111,13 +118,12 @@ async function api(path, options = {}) {
   return response.text();
 }
 
-function activeDetail() {
-  return state.projectDetail || demoProject;
-}
-
-function primaryDomain(detail = activeDetail()) {
-  const domains = detail.scope?.domains || [];
-  return domains[0] || detail.project?.name || "example.com";
+function formatUtcClock() {
+  const now = new Date();
+  const hh = String(now.getUTCHours()).padStart(2, "0");
+  const mm = String(now.getUTCMinutes()).padStart(2, "0");
+  const ss = String(now.getUTCSeconds()).padStart(2, "0");
+  qs("#utc-clock").textContent = `${hh}:${mm}:${ss} UTC`;
 }
 
 function renderProjectSelector() {
@@ -141,158 +147,164 @@ function renderProjectSelector() {
   }
 }
 
-function renderHeader() {
-  const detail = activeDetail();
-  const hasRealProject = Boolean(state.projectDetail);
-  const project = detail.project || {};
-  const scope = detail.scope || {};
-  const name = project.name || primaryDomain(detail);
-  const subtitle = project.description || project.client || "External Pentest Project";
+function metricValues() {
+  if (!isRealProject()) {
+    return {
+      domains: 2,
+      ips: 3,
+      exclusions: 2,
+      subdomains: 128,
+      alive: 34,
+      openPorts: 12,
+    };
+  }
+
+  const scope = currentScope();
   const domains = scope.domains || [];
   const ips = scope.ips || [];
   const exclusions = scope.exclusions || [];
+  const subdomains = domains.length * 64;
+  const alive = Math.max(0, Math.floor(subdomains * 0.27));
+  return {
+    domains: domains.length,
+    ips: ips.length,
+    exclusions: exclusions.length,
+    subdomains,
+    alive,
+    openPorts: Math.max(0, ips.length * 4),
+  };
+}
 
-  qs("#project-title").textContent = name;
-  qs("#project-subtitle").textContent = subtitle || "External Pentest Project";
-  qs("#sidebar-current-project").textContent = name;
-  qs("#scope-summary").innerHTML = `
-    <span>Domains: ${esc(hasRealProject ? domains.length : 3)}</span>
-    <span>IPs: ${esc(hasRealProject ? ips.length : 12)}</span>
-    <span>Exclusions: ${esc(hasRealProject ? exclusions.length : 2)}</span>
-  `;
+function renderHeaderAndMetrics() {
+  const values = metricValues();
+  qs("#project-title").textContent = currentProjectName();
+  qs("#project-subtitle").textContent = subtitle();
+  qs("#config-project-title").textContent = currentProjectName();
+  qs("#scope-summary-text").textContent =
+    `Domains: ${values.domains} / IPs: ${values.ips} / Exclusions: ${values.exclusions}`;
 
-  const subdomains = hasRealProject ? domains.length * 37 : 671;
-  const alive = hasRealProject ? Math.floor(subdomains * 0.34) : 231;
-  qs("#metric-subdomains").textContent = subdomains.toString();
-  qs("#metric-subdomains-detail").textContent = `${alive} alive`;
+  qs("#metric-subdomains").textContent = values.subdomains;
+  qs("#metric-alive").textContent = values.alive;
+  qs("#metric-ports").textContent = values.openPorts;
+  qs("#metric-subdomains-delta").textContent =
+    isRealProject() ? `+${Math.max(values.domains, 0)} in scope` : "+18 new";
+  qs("#metric-alive-delta").textContent = isRealProject() ? `${values.alive} calculated` : "+7 new";
+
+  qs("#stat-ipv4").textContent = values.ips || 45;
+  qs("#stat-domains").textContent = values.domains || 2;
+  qs("#stat-subdomains").textContent = values.subdomains || 128;
+  qs("#stat-alive").textContent = values.alive || 34;
+  qs("#assets-badge").textContent = Math.max(values.domains + values.ips, 0) || 128;
 }
 
 function renderScopeForm() {
-  const detail = activeDetail();
-  const scope = detail.scope || {};
+  const scope = currentScope();
   qs("#scope-form textarea[name='domains']").value = (scope.domains || []).join("\n");
   qs("#scope-form textarea[name='ips']").value = (scope.ips || []).join("\n");
 }
 
-function renderAttackTree() {
-  const domain = primaryDomain();
-  const scope = activeDetail().scope || {};
-  const domains = scope.domains?.length ? scope.domains : [domain];
-  const nodes = [
-    [`www.${domain}`, "443, nginx"],
-    [`admin.${domain}`, "443, Apache"],
-    [`vpn.${domain}`, "8443, SSL VPN"],
-    [`mail.${domain}`, "25, 587, 993"],
-  ];
+function renderLastScans() {
+  const rows = state.jobs.length
+    ? state.jobs.slice(0, 5).map((job) => [
+        titleCase(job.task_type || "scan"),
+        job.created_at || "-",
+        normalizeStatus(job.status),
+      ])
+    : demoScans;
 
-  for (const scopedDomain of domains.slice(1, 4)) {
-    nodes.push([scopedDomain, "80, 443, httpx pending"]);
-  }
-
-  qs("#attack-tree").innerHTML = `
-    <div class="tree-root">${esc(domain)}</div>
-    ${nodes
-      .map(
-        ([host, meta]) => `
-          <div class="tree-item">
-            <span>${esc(host)}</span>
-            <span>${esc(meta)}</span>
+  qs("#last-scans").innerHTML = rows
+    .map(([name, date, status]) => {
+      const stateClass = status === "running" ? "running" : status === "scheduled" ? "scheduled" : "";
+      const glyph = status === "running" ? "~" : status === "scheduled" ? "-" : "ok";
+      return `
+        <div class="scan-row">
+          <span class="scan-state ${stateClass}">${esc(glyph)}</span>
+          <div>
+            <strong>${esc(name)}</strong>
+            <span>${esc(date)}</span>
           </div>
-        `,
-      )
-      .join("")}
-  `;
+          <em class="scan-badge ${stateClass}">${esc(statusLabel(status))}</em>
+        </div>
+      `;
+    })
+    .join("");
 }
 
-function renderFindingsTable() {
-  qs("#findings-table").innerHTML = demoFindings
+function renderActivity() {
+  const rows = state.jobs.length
+    ? state.jobs.slice(0, 5).map((job) => [
+        shortTime(job.created_at),
+        job.status === "failed" ? "[!]" : job.status === "running" ? "[~]" : "[OK]",
+        `Job ${job.status}`,
+        titleCase(job.task_type),
+        job.result?.targets ? `${job.result.targets} targets` : "-",
+        job.finished_at ? "done" : "-",
+        job.error || JSON.stringify(job.result || {}),
+        job.status === "failed" ? "danger" : job.status === "running" ? "warn" : "ok",
+        job.status === "failed" ? "red" : job.status === "running" ? "yellow" : "green",
+      ])
+    : demoActivity;
+
+  qs("#activity-log").innerHTML = rows
     .map(
-      ([severity, finding, asset, status]) => `
-        <tr>
-          <td><span class="severity ${esc(severity)}">${esc(severity)}</span></td>
-          <td>${esc(finding)}</td>
-          <td>${esc(asset)}</td>
-          <td>${esc(status)}</td>
-        </tr>
+      ([time, mark, event, scan, asset, path, status, markClass, statusClass]) => `
+        <div class="activity-row">
+          <span>${esc(time)}</span>
+          <span class="${esc(markClass)}">${esc(mark)}</span>
+          <span>${esc(event)}</span>
+          <span>${esc(scan)}</span>
+          <span>${esc(asset)}</span>
+          <span>${esc(path)}</span>
+          <span class="${esc(statusClass)}">${esc(status)}</span>
+        </div>
       `,
     )
     .join("");
 }
 
-function renderRunningScans() {
-  const running = state.jobs.find((job) => job.status === "running");
-  const queued = state.jobs.find((job) => job.status === "queued");
-  const recent = running || queued || state.jobs[0];
-
-  if (recent) {
-    const progress = recent.status === "succeeded" ? 100 : recent.status === "failed" ? 100 : 72;
-    const eta = recent.status === "running" ? "ETA 4 min" : recent.status;
-    qs("#running-scans").innerHTML = `
-      <div class="scan-title">
-        <strong>${esc(recent.task_type)}</strong>
-        <span class="chip ${recent.status === "failed" ? "red" : "blue"}">${esc(recent.status)}</span>
-      </div>
-      <p class="scan-meta">target: ${esc(primaryDomain())} / job ${esc(recent.id.slice(0, 8))}</p>
-      <div class="progress-track"><div class="progress-bar" style="width:${progress}%"></div></div>
-      <div class="scan-stats">
-        <span>${progress}% progress</span>
-        <span>${esc(recent.result?.findings ?? 8)} findings</span>
-        <span>${esc(eta)}</span>
-      </div>
-    `;
-    return;
-  }
-
-  qs("#running-scans").innerHTML = `
-    <div class="scan-title">
-      <strong>Nuclei Scan</strong>
-      <span class="chip blue">running</span>
-    </div>
-    <p class="scan-meta">target: alive_urls.txt</p>
-    <div class="progress-track"><div class="progress-bar"></div></div>
-    <div class="scan-stats">
-      <span>72% progress</span>
-      <span>8 findings</span>
-      <span>ETA 4 min</span>
-    </div>
-  `;
-}
-
-async function renderTerminalLog() {
-  const recent = state.jobs[0];
-  if (!recent) {
-    qs("#terminal-log").textContent = demoLog;
-    return;
-  }
-
-  try {
-    const log = await api(`/api/jobs/${encodeURIComponent(recent.id)}/log`);
-    qs("#terminal-log").textContent = log || demoLog;
-  } catch (_) {
-    qs("#terminal-log").textContent = demoLog;
-  }
-}
-
 function renderAll() {
   renderProjectSelector();
-  renderHeader();
+  renderHeaderAndMetrics();
   renderScopeForm();
-  renderAttackTree();
-  renderFindingsTable();
-  renderRunningScans();
+  renderLastScans();
+  renderActivity();
+}
+
+function titleCase(value) {
+  return String(value || "")
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeStatus(status) {
+  if (status === "queued") return "scheduled";
+  if (status === "succeeded") return "completed";
+  return status || "scheduled";
+}
+
+function statusLabel(status) {
+  if (status === "completed") return "Completed";
+  if (status === "running") return "Running";
+  if (status === "failed") return "Failed";
+  return "Scheduled";
+}
+
+function shortTime(value) {
+  if (!value) return "--:--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(11, 19) || "--:--:--";
+  return date.toISOString().slice(11, 19);
 }
 
 async function loadProjects() {
   const data = await api("/api/projects");
   state.projects = data.projects || [];
-
   const selectedExists = state.projects.some((project) => project.name === state.selectedProject);
+
   if ((!state.selectedProject || !selectedExists) && state.projects.length) {
     state.selectedProject = state.projects[0].name;
     localStorage.setItem("lastest_project", state.selectedProject);
   }
-
-  renderProjectSelector();
 }
 
 async function loadProjectDetail() {
@@ -312,48 +324,41 @@ async function loadJobs() {
   state.jobs = data.jobs || [];
 }
 
-async function selectProject(name) {
-  state.selectedProject = name;
-  if (name) {
-    localStorage.setItem("lastest_project", name);
-  } else {
-    localStorage.removeItem("lastest_project");
-  }
-  await loadProjectDetail();
-  await loadJobs();
-  renderAll();
-  await renderTerminalLog();
-}
-
 async function refreshData() {
   await loadProjects();
   await loadProjectDetail().catch(() => {
-    state.selectedProject = "";
     state.projectDetail = null;
+    state.selectedProject = "";
     localStorage.removeItem("lastest_project");
   });
   await loadJobs().catch(() => {
     state.jobs = [];
   });
   renderAll();
-  await renderTerminalLog();
+}
+
+async function selectProject(name) {
+  state.selectedProject = name;
+  if (name) {
+    localStorage.setItem("lastest_project", name);
+  }
+  await loadProjectDetail();
+  await loadJobs();
+  renderAll();
 }
 
 async function boot() {
   qs("#api-key").value = state.apiKey;
+  formatUtcClock();
   renderAll();
-  await renderTerminalLog();
 
   if (!state.apiKey) {
-    setApiStatus("no key", "waiting");
     return;
   }
 
   try {
     await refreshData();
-    setApiStatus("connected", "ok");
   } catch (error) {
-    setApiStatus("denied", "error");
     showNotice(error.message);
   }
 }
@@ -363,6 +368,7 @@ qs("#api-key-form").addEventListener("submit", async (event) => {
   state.apiKey = qs("#api-key").value.trim();
   localStorage.setItem("lastest_api_key", state.apiKey);
   await boot();
+  showNotice("API key saved.");
 });
 
 qs("#new-project-toggle").addEventListener("click", () => {
@@ -384,14 +390,13 @@ qs("#create-project-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({
         name: form.get("name"),
         client: form.get("client"),
-        description: form.get("description") || "External Pentest Project",
+        description: form.get("description") || "External penetration test assessment overview and insights.",
       }),
     });
     event.currentTarget.reset();
     event.currentTarget.hidden = true;
     await loadProjects();
     await selectProject(created.project.name);
-    setApiStatus("connected", "ok");
     showNotice("Project created.");
   } catch (error) {
     showNotice(error.message);
@@ -424,41 +429,31 @@ qs("#scope-form").addEventListener("submit", async (event) => {
       }),
     });
     await refreshData();
-    setApiStatus("connected", "ok");
-    showNotice("Scope saved.");
+    showNotice("DNS / IP scope saved.");
   } catch (error) {
     showNotice(error.message);
   }
 });
 
 qs("#refresh-detail").addEventListener("click", () => {
-  refreshData()
-    .then(() => setApiStatus("connected", "ok"))
-    .catch((error) => {
-      setApiStatus("error", "error");
-      showNotice(error.message);
-    });
+  refreshData().catch((error) => showNotice(error.message));
 });
 
-qs("#refresh-jobs").addEventListener("click", () => {
-  loadJobs()
-    .then(() => {
-      renderRunningScans();
-      return renderTerminalLog();
-    })
-    .catch((error) => showNotice(error.message));
+qsa(".nav-list a").forEach((link) => {
+  link.addEventListener("click", () => {
+    qsa(".nav-list a").forEach((item) => item.classList.remove("active"));
+    link.classList.add("active");
+  });
 });
 
 boot();
-
+setInterval(formatUtcClock, 1000);
 setInterval(() => {
-  if (!state.apiKey || !state.selectedProject) {
-    return;
-  }
+  if (!state.apiKey || !state.selectedProject) return;
   loadJobs()
     .then(() => {
-      renderRunningScans();
-      return renderTerminalLog();
+      renderLastScans();
+      renderActivity();
     })
     .catch(() => {});
-}, 6000);
+}, 7000);
