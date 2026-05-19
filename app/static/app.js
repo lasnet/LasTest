@@ -4,7 +4,8 @@ const state = {
   authRequired: true,
   authConfigured: false,
   setupRequired: false,
-  selectedProject: localStorage.getItem("lastest_project") || "",
+  activeView: normalizeView(location.hash.slice(1) || "dashboard"),
+  selectedProject: "",
   projects: [],
   projectDetail: null,
   dashboard: null,
@@ -12,35 +13,6 @@ const state = {
   users: [],
   auditEvents: [],
 };
-
-const demoProject = {
-  project: {
-    name: "example.com",
-    client: "Analyst",
-    description: "External penetration test assessment overview and insights.",
-  },
-  scope: {
-    domains: ["example.com", "api.example.com"],
-    ips: ["93.184.216.34", "203.0.113.14", "203.0.113.28"],
-    exclusions: ["legacy.example.com", "10.0.0.0/8"],
-  },
-};
-
-const demoScans = [
-  ["Full Scan", "May 12, 2025  13:45 UTC", "completed"],
-  ["Web App Scan", "May 11, 2025  22:31 UTC", "completed"],
-  ["API Scan", "May 12, 2025  14:28 UTC", "running"],
-  ["Network Scan", "May 10, 2025  18:05 UTC", "scheduled"],
-  ["Subdomain Enum", "May 12, 2025  12:02 UTC", "completed"],
-];
-
-const demoActivity = [
-  ["14:31:55", "[OK]", "Scan completed", "Full Scan", "34 hosts", "7m 42s", "0 critical, 2 high", "ok", "green"],
-  ["14:28:11", "[~]", "Scan started", "API Scan", "-", "-", "in progress", "warn", "yellow"],
-  ["14:25:03", "[!]", "High severity finding", "SQL Injection", "api.example.com", "/v1/users", "High", "danger", "red"],
-  ["14:22:47", "[OK]", "Asset added", "93.184.216.34", "-", "-", "New host discovered", "ok", "green"],
-  ["14:18:33", "[i]", "Subdomain discovered", "api-staging.example.com", "-", "-", "New subdomain", "info-text", "green"],
-];
 
 const qs = (selector) => document.querySelector(selector);
 const qsa = (selector) => Array.from(document.querySelectorAll(selector));
@@ -78,7 +50,21 @@ function detail() {
       scope: state.dashboard.scope || {},
     };
   }
-  return state.projectDetail || demoProject;
+  if (state.projectDetail) {
+    return state.projectDetail;
+  }
+  return {
+    project: {
+      name: "Select project",
+      client: "",
+      description: "Choose a project from the workspace selector to load live data.",
+    },
+    scope: {
+      domains: [],
+      ips: [],
+      exclusions: [],
+    },
+  };
 }
 
 function currentScope() {
@@ -86,8 +72,11 @@ function currentScope() {
 }
 
 function currentProjectName() {
+  if (!state.selectedProject && !isRealProject()) {
+    return "Select project";
+  }
   const scope = currentScope();
-  return detail().project?.name || scope.domains?.[0] || "example.com";
+  return detail().project?.name || state.selectedProject || scope.domains?.[0] || "Select project";
 }
 
 function subtitle() {
@@ -101,6 +90,22 @@ function subtitle() {
 
 function isRealProject() {
   return Boolean(state.projectDetail || state.dashboard);
+}
+
+function normalizeView(value) {
+  const allowed = new Set([
+    "dashboard",
+    "assets",
+    "recon",
+    "scans",
+    "findings",
+    "reports",
+    "automation",
+    "project-config",
+    "logs",
+    "system-admin",
+  ]);
+  return allowed.has(value) ? value : "dashboard";
 }
 
 async function api(path, options = {}) {
@@ -202,10 +207,14 @@ function renderAuthState() {
   const item = qs("#auth-state");
   const user = qs("#current-user");
   const logout = qs("#logout-button");
+  const sidebarUser = qs("#sidebar-user");
+  const sidebarRole = qs("#sidebar-role");
   if (!state.authRequired) {
     item.textContent = "Auth off";
     item.className = "auth-state ok";
     user.textContent = "local-system";
+    sidebarUser.textContent = "local-system";
+    sidebarRole.textContent = "Admin";
     logout.hidden = true;
     return;
   }
@@ -213,12 +222,16 @@ function renderAuthState() {
     item.textContent = state.user.role || "user";
     item.className = "auth-state ok";
     user.textContent = state.user.username || "signed in";
+    sidebarUser.textContent = state.user.username || "signed in";
+    sidebarRole.textContent = titleCase(state.user.role || "user");
     logout.hidden = false;
     return;
   }
   item.textContent = state.setupRequired ? "Setup" : "Signed out";
   item.className = "auth-state warn";
   user.textContent = state.setupRequired ? "Bootstrap admin" : "Not signed in";
+  sidebarUser.textContent = state.setupRequired ? "Bootstrap admin" : "Not signed in";
+  sidebarRole.textContent = state.setupRequired ? "Setup required" : "Signed out";
   logout.hidden = true;
 }
 
@@ -242,13 +255,18 @@ function formatUtcClock() {
 
 function renderProjectSelector() {
   const select = qs("#project-select");
+  const status = qs("#workspace-status");
   select.innerHTML = "";
+  status.classList.toggle("idle", !state.selectedProject);
+  status.innerHTML = `<span></span>${state.selectedProject ? "Active" : "No project selected"}`;
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = state.projects.length ? "Select project" : "Create a project";
+  placeholder.selected = !state.selectedProject;
+  select.appendChild(placeholder);
 
   if (!state.projects.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "Create a project";
-    select.appendChild(option);
     return;
   }
 
@@ -283,19 +301,19 @@ function metricValues() {
 
   if (!isRealProject()) {
     return {
-      domains: 2,
-      ips: 3,
-      exclusions: 2,
-      subdomains: 128,
-      dnsHosts: 3,
-      alive: 34,
-      openPorts: 12,
-      findings: 5,
-      critical: 1,
-      high: 2,
-      medium: 1,
-      low: 1,
-      info: 7,
+      domains: 0,
+      ips: 0,
+      exclusions: 0,
+      subdomains: 0,
+      dnsHosts: 0,
+      alive: 0,
+      openPorts: 0,
+      findings: 0,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      info: 0,
     };
   }
 
@@ -335,26 +353,27 @@ function renderHeaderAndMetrics() {
   qs("#metric-ports").textContent = values.openPorts;
   qs("#metric-findings").textContent = values.findings;
   qs("#metric-subdomains-delta").textContent =
-    isRealProject() ? `${values.dnsHosts} DNS hosts` : "+18 new";
-  qs("#metric-alive-delta").textContent = isRealProject() ? `${values.alive} alive targets` : "+7 new";
-  qs("#metric-ports-delta").textContent = isRealProject() ? "from HTTP probe" : "+2 new";
+    isRealProject() ? `${values.dnsHosts} DNS hosts` : "select project";
+  qs("#metric-alive-delta").textContent = isRealProject() ? `${values.alive} alive targets` : "select project";
+  qs("#metric-ports-delta").textContent = isRealProject() ? "from HTTP probe" : "select project";
   qs("#metric-findings-delta").textContent =
-    isRealProject() ? `${values.critical} critical / ${values.high} high` : "-1 resolved";
+    isRealProject() ? `${values.critical} critical / ${values.high} high` : "select project";
 
-  qs("#stat-ipv4").textContent = isRealProject() ? values.ips : 45;
-  qs("#stat-dns-hosts").textContent = isRealProject() ? values.dnsHosts : 3;
-  qs("#stat-domains").textContent = isRealProject() ? values.domains : 2;
-  qs("#stat-subdomains").textContent = isRealProject() ? values.subdomains : 128;
-  qs("#stat-alive").textContent = isRealProject() ? values.alive : 34;
+  qs("#stat-ipv4").textContent = values.ips;
+  qs("#stat-dns-hosts").textContent = values.dnsHosts;
+  qs("#stat-domains").textContent = values.domains;
+  qs("#stat-subdomains").textContent = values.subdomains;
+  qs("#stat-alive").textContent = values.alive;
   qs("#assets-badge").textContent = isRealProject()
     ? values.domains + values.ips + values.subdomains + values.alive
-    : 128;
-  qs("#findings-badge").textContent = isRealProject() ? values.findings : 5;
-  qs("#scans-badge").textContent = isRealProject() ? state.jobs.length : 12;
+    : 0;
+  qs("#findings-badge").textContent = values.findings;
+  qs("#scans-badge").textContent = isRealProject() ? state.jobs.length : 0;
   qs("#last-discovery").textContent = state.dashboard
     ? `Last discovery: ${lastFinishedScanTime()}`
-    : "Last discovery: 2m ago";
-  qs("#freshness-state").textContent = state.dashboard ? "Live data" : "Demo data";
+    : "Last discovery: waiting";
+  qs("#freshness-state").textContent = state.dashboard ? "Live data" : "Select project";
+  qs("#project-required").hidden = Boolean(state.selectedProject);
   renderFindingsOverview(values);
 }
 
@@ -373,24 +392,27 @@ function renderLastScans() {
         job.created_at || "-",
         normalizeStatus(job.status),
       ])
-    : demoScans;
+    : [];
 
-  qs("#last-scans").innerHTML = rows
-    .map(([name, date, status]) => {
-      const stateClass = status === "running" ? "running" : status === "scheduled" ? "scheduled" : "";
-      const glyph = status === "running" ? "~" : status === "scheduled" ? "-" : "ok";
-      return `
-        <div class="scan-row">
-          <span class="scan-state ${stateClass}">${esc(glyph)}</span>
-          <div>
-            <strong>${esc(name)}</strong>
-            <span>${esc(date)}</span>
-          </div>
-          <em class="scan-badge ${stateClass}">${esc(statusLabel(status))}</em>
-        </div>
-      `;
-    })
-    .join("");
+  qs("#last-scans").innerHTML = rows.length
+    ? rows
+        .map(([name, date, status]) => {
+          const stateClass = status === "running" ? "running" : status === "scheduled" ? "scheduled" : "";
+          const glyph = status === "running" ? "~" : status === "scheduled" ? "-" : "ok";
+          return `
+            <div class="scan-row">
+              <span class="scan-state ${stateClass}">${esc(glyph)}</span>
+              <div>
+                <strong>${esc(name)}</strong>
+                <span>${esc(date)}</span>
+              </div>
+              <em class="scan-badge ${stateClass}">${esc(statusLabel(status))}</em>
+            </div>
+          `;
+        })
+        .join("")
+    : emptyState(state.selectedProject ? "No scans yet." : "Select a project to view scans.");
+  qs("#scans-list-page").innerHTML = qs("#last-scans").innerHTML;
 }
 
 function renderActivity() {
@@ -418,23 +440,25 @@ function renderActivity() {
         job.status === "failed" ? "danger" : job.status === "running" ? "warn" : "ok",
         job.status === "failed" ? "red" : job.status === "running" ? "yellow" : "green",
       ])
-    : demoActivity;
+    : [];
 
-  qs("#activity-log").innerHTML = rows
-    .map(
-      ([time, mark, event, scan, asset, path, status, markClass, statusClass]) => `
-        <div class="activity-row">
-          <span>${esc(time)}</span>
-          <span class="${esc(markClass)}">${esc(mark)}</span>
-          <span>${esc(event)}</span>
-          <span>${esc(scan)}</span>
-          <span>${esc(asset)}</span>
-          <span>${esc(path)}</span>
-          <span class="${esc(statusClass)}">${esc(status)}</span>
-        </div>
-      `,
-    )
-    .join("");
+  qs("#activity-log").innerHTML = rows.length
+    ? rows
+        .map(
+          ([time, mark, event, scan, asset, path, status, markClass, statusClass]) => `
+            <div class="activity-row">
+              <span>${esc(time)}</span>
+              <span class="${esc(markClass)}">${esc(mark)}</span>
+              <span>${esc(event)}</span>
+              <span>${esc(scan)}</span>
+              <span>${esc(asset)}</span>
+              <span>${esc(path)}</span>
+              <span class="${esc(statusClass)}">${esc(status)}</span>
+            </div>
+          `,
+        )
+        .join("")
+    : emptyState(state.selectedProject ? "No activity yet." : "Select a project to view logs.");
 }
 
 function renderFindingsOverview(values) {
@@ -443,7 +467,13 @@ function renderFindingsOverview(values) {
   qs("#finding-medium").textContent = values.medium;
   qs("#finding-low").textContent = values.low;
   qs("#finding-info").textContent = values.info;
-  qs("#finding-total").textContent = isRealProject() ? values.findings : 12;
+  qs("#finding-total").textContent = values.findings;
+  qs("#finding-page-critical").textContent = values.critical;
+  qs("#finding-page-high").textContent = values.high;
+  qs("#finding-page-medium").textContent = values.medium;
+  qs("#finding-page-low").textContent = values.low;
+  qs("#finding-page-info").textContent = values.info;
+  qs("#finding-page-total").textContent = values.findings;
 }
 
 function renderReconAssets() {
@@ -470,6 +500,10 @@ function renderReconAssets() {
         return assetItem(item.url || item.host, detailText);
       }).join("")
     : emptyState("No alive HTTP hosts yet. Run HTTP Probe.");
+
+  qs("#assets-subdomain-list").innerHTML = qs("#subdomain-list").innerHTML;
+  qs("#assets-dns-record-list").innerHTML = qs("#dns-record-list").innerHTML;
+  qs("#assets-http-probe-list").innerHTML = qs("#http-probe-list").innerHTML;
 }
 
 function assetItem(title, subtitleText) {
@@ -494,6 +528,7 @@ function renderAll() {
   renderReconAssets();
   renderAdminPanel();
   renderPermissionControls();
+  renderViews();
 }
 
 function renderPermissionControls() {
@@ -502,7 +537,34 @@ function renderPermissionControls() {
     button.disabled = disabled;
   });
   qs("#admin-nav-link").hidden = !canAdmin();
-  qs("#system-admin").hidden = !canAdmin();
+}
+
+function renderViews() {
+  const view = canAdmin() || state.activeView !== "system-admin" ? state.activeView : "dashboard";
+  state.activeView = view;
+  qsa("[data-view]").forEach((item) => {
+    item.hidden = item.dataset.view !== view;
+  });
+  qsa("[data-view-link]").forEach((link) => {
+    link.classList.toggle("active", link.dataset.viewLink === view);
+  });
+  if (view === "dashboard") {
+    qs("#project-required").hidden = Boolean(state.selectedProject);
+    qsa(".requires-project").forEach((item) => {
+      item.hidden = !state.selectedProject;
+    });
+  }
+}
+
+function navigateTo(view) {
+  state.activeView = normalizeView(view);
+  if (state.activeView === "system-admin" && !canAdmin()) {
+    state.activeView = "dashboard";
+  }
+  if (location.hash.slice(1) !== state.activeView) {
+    history.pushState(null, "", `#${state.activeView}`);
+  }
+  renderViews();
 }
 
 function renderAdminPanel() {
@@ -565,15 +627,9 @@ async function loadProjects() {
   state.projects = data.projects || [];
   const selectedExists = state.projects.some((project) => project.name === state.selectedProject);
 
-  if (!state.projects.length) {
+  if (!state.projects.length || (state.selectedProject && !selectedExists)) {
     state.selectedProject = "";
     localStorage.removeItem("lastest_project");
-    return;
-  }
-
-  if ((!state.selectedProject || !selectedExists) && state.projects.length) {
-    state.selectedProject = state.projects[0].name;
-    localStorage.setItem("lastest_project", state.selectedProject);
   }
 }
 
@@ -619,18 +675,24 @@ async function loadAdminData() {
 
 async function refreshData() {
   await loadProjects();
-  await loadProjectDetail().catch(() => {
+  if (!state.selectedProject) {
     state.projectDetail = null;
     state.dashboard = null;
-    state.selectedProject = "";
-    localStorage.removeItem("lastest_project");
-  });
-  await loadDashboard().catch(() => {
-    state.dashboard = null;
-    return loadJobs().catch(() => {
-      state.jobs = [];
+    state.jobs = [];
+  } else {
+    await loadProjectDetail().catch(() => {
+      state.projectDetail = null;
+      state.dashboard = null;
+      state.selectedProject = "";
+      localStorage.removeItem("lastest_project");
     });
-  });
+    await loadDashboard().catch(() => {
+      state.dashboard = null;
+      return loadJobs().catch(() => {
+        state.jobs = [];
+      });
+    });
+  }
   await loadAdminData().catch(() => {
     state.users = [];
     state.auditEvents = [];
@@ -642,6 +704,13 @@ async function selectProject(name) {
   state.selectedProject = name;
   if (name) {
     localStorage.setItem("lastest_project", name);
+  } else {
+    localStorage.removeItem("lastest_project");
+    state.projectDetail = null;
+    state.dashboard = null;
+    state.jobs = [];
+    renderAll();
+    return;
   }
   await loadProjectDetail();
   await loadDashboard().catch(() => loadJobs());
@@ -693,7 +762,6 @@ async function boot() {
   showLogin(!hasApiAccess());
 
   if (!hasApiAccess()) {
-    qs("#create-project-form").hidden = false;
     return;
   }
 
@@ -701,6 +769,7 @@ async function boot() {
     await refreshData();
   } catch (error) {
     showNotice(error.message);
+    renderAll();
   }
 }
 
@@ -718,11 +787,17 @@ qs("#login-form").addEventListener("submit", async (event) => {
     state.token = data.access_token;
     state.user = data.user;
     localStorage.setItem("lastest_auth_token", state.token);
+    state.selectedProject = "";
+    state.projectDetail = null;
+    state.dashboard = null;
+    state.jobs = [];
+    localStorage.removeItem("lastest_project");
     event.currentTarget.reset();
     showLogin(false);
     renderAuthState();
-    await refreshData();
     showNotice("Signed in.");
+    renderAll();
+    refreshData().catch((error) => showNotice(error.message));
   } catch (error) {
     showNotice(error.message);
   }
@@ -740,6 +815,9 @@ qs("#logout-button").addEventListener("click", async () => {
     state.projectDetail = null;
     state.dashboard = null;
     state.jobs = [];
+    state.selectedProject = "";
+    localStorage.removeItem("lastest_project");
+    navigateTo("dashboard");
     renderAuthState();
     renderAll();
     showLogin(state.authRequired);
@@ -832,6 +910,18 @@ qs("#refresh-recon").addEventListener("click", () => {
   refreshData().catch((error) => showNotice(error.message));
 });
 
+qs("#refresh-assets").addEventListener("click", () => {
+  refreshData().catch((error) => showNotice(error.message));
+});
+
+qs("#refresh-scans").addEventListener("click", () => {
+  refreshData().catch((error) => showNotice(error.message));
+});
+
+qs("#refresh-logs").addEventListener("click", () => {
+  refreshData().catch((error) => showNotice(error.message));
+});
+
 qs("#refresh-admin").addEventListener("click", () => {
   loadAdminData()
     .then(() => renderAll())
@@ -869,11 +959,16 @@ qsa(".run-task").forEach((button) => {
   });
 });
 
-qsa(".nav-list a").forEach((link) => {
-  link.addEventListener("click", () => {
-    qsa(".nav-list a").forEach((item) => item.classList.remove("active"));
-    link.classList.add("active");
+qsa("[data-view-link]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    navigateTo(link.dataset.viewLink);
   });
+});
+
+window.addEventListener("hashchange", () => {
+  state.activeView = normalizeView(location.hash.slice(1) || "dashboard");
+  renderViews();
 });
 
 boot();

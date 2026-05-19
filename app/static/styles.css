@@ -203,6 +203,15 @@ dd {
   box-shadow: 0 0 16px rgba(67, 195, 107, 0.7);
 }
 
+.active-line.idle {
+  color: var(--muted);
+}
+
+.active-line.idle span {
+  background: var(--dim);
+  box-shadow: none;
+}
+
 .ghost-action,
 .inline-action,
 .config-link {
@@ -927,6 +936,16 @@ dd {
 
 .scope-actions {
   margin-top: 16px;
+}
+
+.page-actions {
+  margin: 0 0 18px;
+}
+
+.empty-project-panel p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .scope-form {

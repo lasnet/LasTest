@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pentest Platform</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260519-ui3" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260519-ui4" />
   </head>
   <body>
     <div class="app-shell">
@@ -19,7 +19,7 @@
         <section class="workspace-card">
           <p class="section-label">Workspace</p>
           <select id="project-select" aria-label="Current project"></select>
-          <div class="active-line"><span></span>Active</div>
+          <div id="workspace-status" class="active-line idle"><span></span>No project selected</div>
           <button id="new-project-toggle" class="ghost-action" type="button">+ New project</button>
         </section>
 
@@ -40,42 +40,46 @@
         </form>
 
         <nav class="nav-list" aria-label="Dashboard navigation">
-          <a class="active" href="#dashboard">
+          <a class="active" href="#dashboard" data-view-link="dashboard">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 10.8 12 3l9 7.8v9.7h-6v-6H9v6H3z" /></svg>
             Dashboard
           </a>
-          <a href="#assets">
+          <a href="#assets" data-view-link="assets">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5h16v11H4zM8 20h8M12 16v4" /></svg>
             Assets
-            <span id="assets-badge">128</span>
+            <span id="assets-badge">0</span>
           </a>
-          <a href="#recon">
+          <a href="#recon" data-view-link="recon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M7.8 7.8l2.1 2.1M14.1 14.1l2.1 2.1M16.2 7.8l-2.1 2.1M9.9 14.1l-2.1 2.1" /><circle cx="12" cy="12" r="3" /></svg>
             Recon
           </a>
-          <a href="#scans">
+          <a href="#scans" data-view-link="scans">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l2-6 4 13 2-7h6" /></svg>
             Scans
-            <span id="scans-badge">12</span>
+            <span id="scans-badge">0</span>
           </a>
-          <a href="#findings">
+          <a href="#findings" data-view-link="findings">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v3M12 18v3M4.9 4.9 7 7M17 17l2.1 2.1M3 12h3M18 12h3M4.9 19.1 7 17M17 7l2.1-2.1" /><circle cx="12" cy="12" r="4" /></svg>
             Findings
-            <span id="findings-badge">5</span>
+            <span id="findings-badge">0</span>
           </a>
-          <a href="#reports">
+          <a href="#reports" data-view-link="reports">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 3h7l4 4v14H7zM14 3v5h5M9 13h6M9 17h6M9 9h2" /></svg>
             Reports
           </a>
-          <a href="#automation">
+          <a href="#automation" data-view-link="automation">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m13 2-9 12h7l-1 8 10-13h-7z" /></svg>
             Automation
           </a>
-          <a href="#project-config">
+          <a href="#project-config" data-view-link="project-config">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /><path d="M4 12h2M18 12h2M12 4v2M12 18v2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4" /></svg>
             Projects / Scope
           </a>
-          <a id="admin-nav-link" href="#system-admin" hidden>
+          <a href="#logs" data-view-link="logs">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg>
+            Logs
+          </a>
+          <a id="admin-nav-link" href="#system-admin" data-view-link="system-admin" hidden>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3 4 6v6c0 5 3.4 8 8 9 4.6-1 8-4 8-9V6z" /><path d="M9 12l2 2 4-5" /></svg>
             Admin
           </a>
@@ -86,8 +90,8 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4" /><path d="M4 21c1.4-4 4-6 8-6s6.6 2 8 6" /></svg>
           </div>
           <div>
-            <strong>analyst@pentest.io</strong>
-            <span>Analyst</span>
+            <strong id="sidebar-user">Not signed in</strong>
+            <span id="sidebar-role">Signed out</span>
           </div>
         </footer>
       </aside>
@@ -114,18 +118,13 @@
         </header>
 
         <main id="dashboard" class="dashboard">
-          <section class="dashboard-heading">
+          <section class="dashboard-heading" data-view="dashboard">
             <div>
-              <h1>Dashboard <span>/</span> <strong id="project-title">example.com</strong></h1>
+              <h1>Dashboard <span>/</span> <strong id="project-title">Select project</strong></h1>
               <p id="project-subtitle">External penetration test assessment overview and insights.</p>
             </div>
             <div class="heading-actions">
-              <a class="config-link" href="#project-config">Configure scope</a>
-              <div class="quick-actions">
-                <button class="run-task" data-task="subfinder" type="button">Subdomains</button>
-                <button class="run-task" data-task="dns-records" type="button">DNS Records</button>
-                <button class="run-task" data-task="httpx-root" type="button">HTTP Probe</button>
-              </div>
+              <a class="config-link" href="#project-config" data-view-link="project-config">Configure scope</a>
               <button class="date-filter" type="button">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 3v4M17 3v4M4 9h16M5 5h14v16H5z" /></svg>
                 Last 7 days
@@ -134,14 +133,19 @@
             </div>
           </section>
 
-          <section class="metric-grid" aria-label="Security metrics">
+          <section id="project-required" class="panel empty-project-panel" data-view="dashboard" hidden>
+            <header class="panel-title">Project required</header>
+            <p>Select a project in the workspace selector or create a new project to load live dashboard data.</p>
+          </section>
+
+          <section class="metric-grid requires-project" aria-label="Security metrics" data-view="dashboard">
             <article class="metric-card">
               <div class="metric-head">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3.5 3 14 0 18M12 3c-3 3.5-3 14 0 18" /></svg>
                 <span>Subdomains</span>
               </div>
               <div class="metric-body">
-                <div><strong id="metric-subdomains">128</strong><em id="metric-subdomains-delta">+18 new</em></div>
+                <div><strong id="metric-subdomains">0</strong><em id="metric-subdomains-delta">select project</em></div>
                 <svg class="sparkline" width="140" height="58" viewBox="0 0 130 54" fill="none">
                   <path d="M4 42 18 38 28 40 40 30 52 36 65 19 78 34 90 22 101 21 114 10 126 4" />
                 </svg>
@@ -154,7 +158,7 @@
                 <span>Alive Hosts</span>
               </div>
               <div class="metric-body">
-                <div><strong id="metric-alive">34</strong><em id="metric-alive-delta">+7 new</em></div>
+                <div><strong id="metric-alive">0</strong><em id="metric-alive-delta">select project</em></div>
                 <svg class="sparkline" width="140" height="58" viewBox="0 0 130 54" fill="none">
                   <path d="M3 44 16 44 28 31 40 41 52 20 65 36 77 25 88 30 100 10 112 27 126 2" />
                 </svg>
@@ -167,7 +171,7 @@
                 <span>Open Ports</span>
               </div>
               <div class="metric-body">
-                <div><strong id="metric-ports">12</strong><em id="metric-ports-delta">+2 new</em></div>
+                <div><strong id="metric-ports">0</strong><em id="metric-ports-delta">select project</em></div>
                 <svg class="sparkline" width="140" height="58" viewBox="0 0 130 54" fill="none">
                   <path d="M4 43 15 40 27 43 39 33 52 37 64 29 76 35 88 17 101 25 113 12 125 18" />
                 </svg>
@@ -180,13 +184,13 @@
                 <span>Findings</span>
               </div>
               <div class="metric-body">
-                <div><strong id="metric-findings">5</strong><em id="metric-findings-delta" class="resolved">-1 resolved</em></div>
+                <div><strong id="metric-findings">0</strong><em id="metric-findings-delta" class="resolved">select project</em></div>
                 <div class="small-donut"></div>
               </div>
             </article>
           </section>
 
-          <section class="overview-grid">
+          <section class="overview-grid requires-project" data-view="dashboard">
             <article id="assets" class="panel attack-panel">
               <header class="panel-title">Attack Surface Summary</header>
               <div class="attack-summary-body">
@@ -205,11 +209,11 @@
                 <span class="map-dot dot-3"></span>
                 <span class="map-dot dot-4"></span>
                 <dl class="surface-stats">
-                  <div><dt>IPv4 Addresses</dt><dd id="stat-ipv4">45</dd></div>
-                  <div><dt>DNS Hosts</dt><dd id="stat-dns-hosts">3</dd></div>
-                  <div><dt>Domains</dt><dd id="stat-domains">2</dd></div>
-                  <div><dt>Subdomains</dt><dd id="stat-subdomains">128</dd></div>
-                  <div><dt>Alive Hosts</dt><dd id="stat-alive">34</dd></div>
+                  <div><dt>IPv4 Addresses</dt><dd id="stat-ipv4">0</dd></div>
+                  <div><dt>DNS Hosts</dt><dd id="stat-dns-hosts">0</dd></div>
+                  <div><dt>Domains</dt><dd id="stat-domains">0</dd></div>
+                  <div><dt>Subdomains</dt><dd id="stat-subdomains">0</dd></div>
+                  <div><dt>Alive Hosts</dt><dd id="stat-alive">0</dd></div>
                 </dl>
               </div>
               <footer class="panel-footer">
@@ -221,30 +225,56 @@
             <article id="scans" class="panel">
               <header class="panel-title">Last Scans</header>
               <div id="last-scans" class="scan-list"></div>
-              <a class="panel-link" href="#automation">View all scans -></a>
+              <a class="panel-link" href="#scans" data-view-link="scans">View all scans -></a>
             </article>
 
             <article id="findings" class="panel findings-overview">
               <header class="panel-title">Findings Overview</header>
               <div class="findings-layout">
                 <ul class="finding-legend">
-                  <li><i class="critical"></i><span>Critical</span><strong id="finding-critical">1</strong></li>
-                  <li><i class="high"></i><span>High</span><strong id="finding-high">2</strong></li>
-                  <li><i class="medium"></i><span>Medium</span><strong id="finding-medium">1</strong></li>
-                  <li><i class="low"></i><span>Low</span><strong id="finding-low">1</strong></li>
-                  <li><i class="info"></i><span>Info</span><strong id="finding-info">7</strong></li>
+                  <li><i class="critical"></i><span>Critical</span><strong id="finding-critical">0</strong></li>
+                  <li><i class="high"></i><span>High</span><strong id="finding-high">0</strong></li>
+                  <li><i class="medium"></i><span>Medium</span><strong id="finding-medium">0</strong></li>
+                  <li><i class="low"></i><span>Low</span><strong id="finding-low">0</strong></li>
+                  <li><i class="info"></i><span>Info</span><strong id="finding-info">0</strong></li>
                 </ul>
-                <div class="large-donut"><strong id="finding-total">12</strong><span>Total</span></div>
+                <div class="large-donut"><strong id="finding-total">0</strong><span>Total</span></div>
               </div>
-              <a class="panel-link" href="#findings">View all findings -></a>
+              <a class="panel-link" href="#findings" data-view-link="findings">View all findings -></a>
             </article>
           </section>
 
-          <section id="recon" class="panel assets-panel">
+          <section id="assets-page" class="panel assets-panel" data-view="assets" hidden>
             <header class="panel-title row-title">
-              <span>Recon Assets</span>
+              <span>Assets</span>
+              <button id="refresh-assets" type="button" class="inline-action">Refresh</button>
+            </header>
+            <div class="assets-grid">
+              <div class="asset-column">
+                <h3>Subdomains</h3>
+                <div id="assets-subdomain-list" class="asset-list"></div>
+              </div>
+              <div class="asset-column">
+                <h3>DNS Records</h3>
+                <div id="assets-dns-record-list" class="asset-list"></div>
+              </div>
+              <div class="asset-column">
+                <h3>HTTP Services</h3>
+                <div id="assets-http-probe-list" class="asset-list"></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="recon" class="panel assets-panel" data-view="recon" hidden>
+            <header class="panel-title row-title">
+              <span>Recon Checks</span>
               <button id="refresh-recon" type="button" class="inline-action">Refresh</button>
             </header>
+            <div class="scope-actions page-actions">
+              <button class="run-task" data-task="subfinder" type="button">Run Subdomains</button>
+              <button class="run-task" data-task="dns-records" type="button">Run DNS Records</button>
+              <button class="run-task" data-task="httpx-root" type="button">Run HTTP Probe</button>
+            </div>
             <div class="assets-grid">
               <div class="asset-column">
                 <h3>Subdomains</h3>
@@ -261,15 +291,52 @@
             </div>
           </section>
 
-          <section id="logs" class="panel activity-panel">
+          <section id="scans-page" class="panel" data-view="scans" hidden>
+            <header class="panel-title row-title">
+              <span>Scans</span>
+              <button id="refresh-scans" type="button" class="inline-action">Refresh</button>
+            </header>
+            <div id="scans-list-page" class="scan-list"></div>
+          </section>
+
+          <section id="findings-page" class="panel findings-overview" data-view="findings" hidden>
+            <header class="panel-title">Findings</header>
+            <div class="findings-layout">
+              <ul class="finding-legend">
+                <li><i class="critical"></i><span>Critical</span><strong id="finding-page-critical">0</strong></li>
+                <li><i class="high"></i><span>High</span><strong id="finding-page-high">0</strong></li>
+                <li><i class="medium"></i><span>Medium</span><strong id="finding-page-medium">0</strong></li>
+                <li><i class="low"></i><span>Low</span><strong id="finding-page-low">0</strong></li>
+                <li><i class="info"></i><span>Info</span><strong id="finding-page-info">0</strong></li>
+              </ul>
+              <div class="large-donut"><strong id="finding-page-total">0</strong><span>Total</span></div>
+            </div>
+          </section>
+
+          <section id="reports-page" class="panel" data-view="reports" hidden>
+            <header class="panel-title">Reports</header>
+            <div class="empty-state">Report generation will be connected after findings and scan evidence are normalized.</div>
+          </section>
+
+          <section id="automation-page" class="panel" data-view="automation" hidden>
+            <header class="panel-title">Automation</header>
+            <div class="scope-actions page-actions">
+              <button class="run-task" data-task="subfinder" type="button">Subdomains</button>
+              <button class="run-task" data-task="dns-records" type="button">DNS Records</button>
+              <button class="run-task" data-task="httpx-root" type="button">HTTP Probe</button>
+              <button class="run-task" data-task="nuclei" type="button">Nuclei</button>
+            </div>
+          </section>
+
+          <section id="logs" class="panel activity-panel" data-view="logs" hidden>
             <header class="panel-title row-title">
               <span>Recent Activity Log</span>
-              <a href="#logs">View full log -></a>
+              <button id="refresh-logs" type="button" class="inline-action">Refresh</button>
             </header>
             <div id="activity-log" class="activity-log"></div>
           </section>
 
-          <section id="project-config" class="panel config-panel">
+          <section id="project-config" class="panel config-panel" data-view="project-config" hidden>
             <header class="panel-title row-title">
               <span>Projects / Scope</span>
               <button id="refresh-detail" type="button" class="inline-action">Reload</button>
@@ -277,8 +344,8 @@
             <div class="config-grid">
               <div class="config-copy">
                 <p class="section-label">Scope Summary</p>
-                <h2 id="config-project-title">example.com</h2>
-                <p id="scope-summary-text">Domains: 3 / IPs: 12 / Exclusions: 2</p>
+                <h2 id="config-project-title">Select project</h2>
+                <p id="scope-summary-text">Domains: 0 / IPs: 0 / Exclusions: 0</p>
                 <div class="config-note">
                   Add only authorized DNS names, IP addresses and exclusions. These values drive Subdomains, DNS Records and HTTP Probe tasks.
                 </div>
@@ -310,7 +377,7 @@
             </div>
           </section>
 
-          <section id="system-admin" class="panel admin-panel" hidden>
+          <section id="system-admin" class="panel admin-panel" data-view="system-admin" hidden>
             <header class="panel-title row-title">
               <span>Users / Audit Log</span>
               <button id="refresh-admin" type="button" class="inline-action">Refresh</button>
@@ -367,6 +434,6 @@
     </div>
 
     <div id="notice" class="notice" hidden></div>
-    <script src="/static/app.js?v=20260519-ui3"></script>
+    <script src="/static/app.js?v=20260519-ui4"></script>
   </body>
 </html>
