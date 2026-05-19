@@ -1,3 +1,35 @@
+FROM kalilinux/kali-rolling AS go-tools
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    GOBIN=/out
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        golang \
+        libpcap-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /out /tmp/gopath /tmp/gocache \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/hakluke/hakrevdns@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/lc/gau/v2/cmd/gau@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out \
+        go install github.com/tomnomnom/waybackurls@latest \
+    && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath GOBIN=/out CGO_ENABLED=1 \
+        go install github.com/projectdiscovery/katana/cmd/katana@latest \
+    && rm -rf /tmp/gopath /tmp/gocache /root/.cache /root/go
+
+
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -12,15 +44,12 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         amass \
-        build-essential \
         ca-certificates \
         curl \
         dnsmap \
         dnsutils \
         ffuf \
         git \
-        golang \
-        libpcap-dev \
         nikto \
         nmap \
         proxychains4 \
@@ -37,24 +66,16 @@ RUN python3 -m venv /opt/venv \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p /opt/go/bin \
-    && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
-    && go install github.com/hakluke/hakrevdns@latest \
-    && go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
-    && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
-    && go install github.com/lc/gau/v2/cmd/gau@latest \
-    && go install github.com/tomnomnom/waybackurls@latest \
-    && CGO_ENABLED=1 go install github.com/projectdiscovery/katana/cmd/katana@latest
+COPY --from=go-tools /out/ /opt/go/bin/
 
 COPY . .
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/projects /app/data /app/logs \
-    && chown -R appuser:appuser /app /opt/venv
+    && chown -R appuser:appuser /app /opt/venv /opt/go
 
 USER appuser
 
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

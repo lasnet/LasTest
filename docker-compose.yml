@@ -34,9 +34,6 @@ services:
 
   worker:
     image: lastest-pentest-platform:local
-    build:
-      context: .
-      dockerfile: Dockerfile
     command: python -m app.worker
     environment:
       APP_ENV: ${APP_ENV:-local}
