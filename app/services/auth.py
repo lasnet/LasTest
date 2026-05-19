@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import sqlite3
 import uuid
@@ -18,6 +19,7 @@ from app.services.jobs import sqlite_path_from_url, utc_now
 ROLES = {"viewer": 10, "analyst": 20, "admin": 30}
 PASSWORD_HASH_ITERATIONS = 260_000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{1,127}$")
+LOGGER = logging.getLogger(__name__)
 
 
 def utc_datetime() -> datetime:
@@ -194,7 +196,19 @@ class AuthStore:
         password = self.settings.auth_bootstrap_admin_password
         if not password or self.user_count() > 0:
             return
-        self.create_user(username, password, "admin")
+        try:
+            self.create_user(username, password, "admin")
+        except ValueError as exc:
+            LOGGER.error("Bootstrap admin was not created: %s", exc)
+            self.audit(
+                actor=None,
+                action="auth.bootstrap_admin",
+                resource_type="user",
+                resource_id=username,
+                status="failed",
+                details={"error": str(exc)},
+            )
+            return
         self.audit(
             actor=None,
             action="auth.bootstrap_admin",
