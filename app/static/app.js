@@ -1,12 +1,16 @@
 const state = {
-  apiKey: localStorage.getItem("lastest_api_key") || "",
+  token: localStorage.getItem("lastest_auth_token") || "",
+  user: null,
   authRequired: true,
   authConfigured: false,
+  setupRequired: false,
   selectedProject: localStorage.getItem("lastest_project") || "",
   projects: [],
   projectDetail: null,
   dashboard: null,
   jobs: [],
+  users: [],
+  auditEvents: [],
 };
 
 const demoProject = {
@@ -104,8 +108,8 @@ async function api(path, options = {}) {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
-  if (state.apiKey) {
-    headers["X-API-Key"] = state.apiKey;
+  if (state.token) {
+    headers.Authorization = `Bearer ${state.token}`;
   }
 
   const response = await fetch(path, { ...options, headers });
@@ -118,7 +122,7 @@ async function api(path, options = {}) {
       detailText = await response.text();
     }
     if (response.status === 401) {
-      detailText = "Invalid API key. Paste WEB_API_KEY from .env into X-API-Key and save it.";
+      detailText = "Session expired or invalid. Sign in again.";
     }
     throw new Error(detailText);
   }
@@ -132,42 +136,100 @@ async function api(path, options = {}) {
 
 async function loadRuntimeStatus() {
   try {
-    const status = await api("/api/health");
+    const status = await api("/api/auth/status");
     state.authRequired = Boolean(status.auth_required);
     state.authConfigured = Boolean(status.auth_configured);
+    state.setupRequired = Boolean(status.setup_required);
   } catch (_) {
     state.authRequired = true;
     state.authConfigured = false;
+    state.setupRequired = false;
   }
+}
+
+async function loadCurrentUser() {
+  if (!state.authRequired) {
+    state.user = { username: "local-system", role: "admin", is_active: true };
+    return true;
+  }
+  if (!state.token) {
+    state.user = null;
+    return false;
+  }
+  try {
+    const data = await api("/api/auth/me");
+    state.user = data.user;
+    return true;
+  } catch (error) {
+    clearSession();
+    return false;
+  }
+}
+
+function clearSession() {
+  state.token = "";
+  state.user = null;
+  localStorage.removeItem("lastest_auth_token");
 }
 
 function hasApiAccess() {
-  return !state.authRequired || Boolean(state.apiKey);
+  return !state.authRequired || Boolean(state.user);
+}
+
+function roleRank(role) {
+  return { viewer: 10, analyst: 20, admin: 30 }[role] || 0;
+}
+
+function canWrite() {
+  return !state.authRequired || roleRank(state.user?.role) >= 20;
+}
+
+function canAdmin() {
+  return !state.authRequired || roleRank(state.user?.role) >= 30;
 }
 
 function authHelpMessage() {
-  if (!state.authConfigured) {
-    return "WEB_API_KEY is not configured on the server.";
+  if (state.setupRequired) {
+    return "No admin user exists. Set AUTH_BOOTSTRAP_ADMIN_PASSWORD in .env and restart.";
   }
-  return "Paste WEB_API_KEY from .env into X-API-Key and save it first.";
+  if (!state.authConfigured) {
+    return "AUTH_JWT_SECRET or WEB_API_KEY is not configured on the server.";
+  }
+  return "Sign in first.";
 }
 
 function renderAuthState() {
   const item = qs("#auth-state");
+  const user = qs("#current-user");
+  const logout = qs("#logout-button");
   if (!state.authRequired) {
     item.textContent = "Auth off";
     item.className = "auth-state ok";
-    qs("#api-key").placeholder = "Auth disabled";
+    user.textContent = "local-system";
+    logout.hidden = true;
     return;
   }
-  if (state.apiKey) {
-    item.textContent = "Key saved";
+  if (state.user) {
+    item.textContent = state.user.role || "user";
     item.className = "auth-state ok";
+    user.textContent = state.user.username || "signed in";
+    logout.hidden = false;
     return;
   }
-  item.textContent = "Key needed";
+  item.textContent = state.setupRequired ? "Setup" : "Signed out";
   item.className = "auth-state warn";
-  qs("#api-key").placeholder = "WEB_API_KEY from .env";
+  user.textContent = state.setupRequired ? "Bootstrap admin" : "Not signed in";
+  logout.hidden = true;
+}
+
+function showLogin(show) {
+  qs("#login-screen").hidden = !show;
+  if (state.setupRequired) {
+    qs("#login-hint").textContent =
+      "No admin user exists. Set AUTH_BOOTSTRAP_ADMIN_PASSWORD in .env and restart the service.";
+  } else {
+    qs("#login-hint").textContent = "Sign in with your platform account.";
+  }
 }
 
 function formatUtcClock() {
@@ -430,6 +492,40 @@ function renderAll() {
   renderLastScans();
   renderActivity();
   renderReconAssets();
+  renderAdminPanel();
+  renderPermissionControls();
+}
+
+function renderPermissionControls() {
+  const disabled = !canWrite();
+  qsa(".run-task, #new-project-toggle, #create-project-form button, #scope-form button").forEach((button) => {
+    button.disabled = disabled;
+  });
+  qs("#admin-nav-link").hidden = !canAdmin();
+  qs("#system-admin").hidden = !canAdmin();
+}
+
+function renderAdminPanel() {
+  if (!canAdmin()) return;
+  qs("#users-list").innerHTML = state.users.length
+    ? state.users.map((user) => `
+        <div class="admin-row">
+          <strong>${esc(user.username)}</strong>
+          <span>${esc(user.role)} / ${user.is_active ? "active" : "disabled"}</span>
+          <span>Last login: ${esc(user.last_login_at || "-")}</span>
+        </div>
+      `).join("")
+    : emptyState("No users loaded.");
+
+  qs("#audit-list").innerHTML = state.auditEvents.length
+    ? state.auditEvents.slice(0, 10).map((event) => `
+        <div class="admin-row">
+          <strong>${esc(event.action)} / ${esc(event.status)}</strong>
+          <span>${esc(event.actor_username || "system")} -> ${esc(event.resource_type)}:${esc(event.resource_id || "-")}</span>
+          <span>${esc(event.created_at)}</span>
+        </div>
+      `).join("")
+    : emptyState("No audit events loaded.");
 }
 
 function titleCase(value) {
@@ -507,6 +603,20 @@ async function loadJobs() {
   state.jobs = data.jobs || [];
 }
 
+async function loadAdminData() {
+  if (!canAdmin()) {
+    state.users = [];
+    state.auditEvents = [];
+    return;
+  }
+  const [usersData, auditData] = await Promise.all([
+    api("/api/auth/users"),
+    api("/api/auth/audit?limit=50"),
+  ]);
+  state.users = usersData.users || [];
+  state.auditEvents = auditData.events || [];
+}
+
 async function refreshData() {
   await loadProjects();
   await loadProjectDetail().catch(() => {
@@ -520,6 +630,10 @@ async function refreshData() {
     return loadJobs().catch(() => {
       state.jobs = [];
     });
+  });
+  await loadAdminData().catch(() => {
+    state.users = [];
+    state.auditEvents = [];
   });
   renderAll();
 }
@@ -537,6 +651,10 @@ async function selectProject(name) {
 async function enqueueTask(taskType, button) {
   if (!hasApiAccess()) {
     showNotice(authHelpMessage());
+    return;
+  }
+  if (!canWrite()) {
+    showNotice("Analyst or admin role is required.");
     return;
   }
   if (!state.selectedProject) {
@@ -568,10 +686,11 @@ async function enqueueTask(taskType, button) {
 
 async function boot() {
   await loadRuntimeStatus();
-  qs("#api-key").value = state.apiKey;
+  await loadCurrentUser();
   formatUtcClock();
   renderAuthState();
   renderAll();
+  showLogin(!hasApiAccess());
 
   if (!hasApiAccess()) {
     qs("#create-project-form").hidden = false;
@@ -585,13 +704,47 @@ async function boot() {
   }
 }
 
-qs("#api-key-form").addEventListener("submit", async (event) => {
+qs("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  state.apiKey = qs("#api-key").value.trim();
-  localStorage.setItem("lastest_api_key", state.apiKey);
-  renderAuthState();
-  await boot();
-  showNotice("API key saved.");
+  const form = new FormData(event.currentTarget);
+  try {
+    const data = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: form.get("username"),
+        password: form.get("password"),
+      }),
+    });
+    state.token = data.access_token;
+    state.user = data.user;
+    localStorage.setItem("lastest_auth_token", state.token);
+    event.currentTarget.reset();
+    showLogin(false);
+    renderAuthState();
+    await refreshData();
+    showNotice("Signed in.");
+  } catch (error) {
+    showNotice(error.message);
+  }
+});
+
+qs("#logout-button").addEventListener("click", async () => {
+  try {
+    if (state.token) {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+    }
+  } catch (_) {
+  } finally {
+    clearSession();
+    state.projects = [];
+    state.projectDetail = null;
+    state.dashboard = null;
+    state.jobs = [];
+    renderAuthState();
+    renderAll();
+    showLogin(state.authRequired);
+    showNotice("Signed out.");
+  }
 });
 
 qs("#new-project-toggle").addEventListener("click", () => {
@@ -603,6 +756,10 @@ qs("#create-project-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasApiAccess()) {
     showNotice(authHelpMessage());
+    return;
+  }
+  if (!canWrite()) {
+    showNotice("Analyst or admin role is required.");
     return;
   }
 
@@ -640,6 +797,10 @@ qs("#scope-form").addEventListener("submit", async (event) => {
     showNotice(authHelpMessage());
     return;
   }
+  if (!canWrite()) {
+    showNotice("Analyst or admin role is required.");
+    return;
+  }
   if (!state.selectedProject) {
     showNotice("Create or select a project first.");
     return;
@@ -671,6 +832,37 @@ qs("#refresh-recon").addEventListener("click", () => {
   refreshData().catch((error) => showNotice(error.message));
 });
 
+qs("#refresh-admin").addEventListener("click", () => {
+  loadAdminData()
+    .then(() => renderAll())
+    .catch((error) => showNotice(error.message));
+});
+
+qs("#create-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!canAdmin()) {
+    showNotice("Admin role is required.");
+    return;
+  }
+  const form = new FormData(event.currentTarget);
+  try {
+    await api("/api/auth/users", {
+      method: "POST",
+      body: JSON.stringify({
+        username: form.get("username"),
+        role: form.get("role"),
+        password: form.get("password"),
+      }),
+    });
+    event.currentTarget.reset();
+    await loadAdminData();
+    renderAll();
+    showNotice("User created.");
+  } catch (error) {
+    showNotice(error.message);
+  }
+});
+
 qsa(".run-task").forEach((button) => {
   button.addEventListener("click", () => {
     enqueueTask(button.dataset.task, button);
@@ -687,7 +879,7 @@ qsa(".nav-list a").forEach((link) => {
 boot();
 setInterval(formatUtcClock, 1000);
 setInterval(() => {
-  if (!state.apiKey || !state.selectedProject) return;
+  if (!hasApiAccess() || !state.selectedProject) return;
   loadDashboard()
     .then(() => {
       renderHeaderAndMetrics();

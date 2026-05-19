@@ -26,7 +26,9 @@ Dashboard не должен считать mock-метрики для реаль
 - CLI слой: `main.py`, `core/`, `modules/`.
 - Web/API слой: `app/main.py`, `app/api/routes.py`.
 - Runtime settings: `app/core/settings.py`.
-- API key guard: `app/core/security.py`.
+- Auth guards and role dependencies: `app/core/security.py`.
+- Auth routes: `app/api/auth_routes.py`.
+- Auth service: `app/services/auth.py`.
 - Project service: `app/services/projects.py`.
 - Job queue: `app/services/jobs.py`.
 - Dashboard aggregator: `app/services/dashboard.py`.
@@ -69,6 +71,8 @@ logs/
 - `core/config.yaml` - безопасный YAML-шаблон без реальных секретов.
 - `app/main.py` - FastAPI app factory и static UI.
 - `app/api/routes.py` - REST endpoints.
+- `app/api/auth_routes.py` - login/logout/me/users/audit endpoints.
+- `app/services/auth.py` - SQLite users, PBKDF2 password hashes, JWT sessions, role checks and audit log.
 - `app/services/projects.py` - создание/чтение проектов и scope.
 - `app/services/jobs.py` - SQLite jobs storage.
 - `app/services/dashboard.py` - чтение subdomains, DNS records, HTTP probe, nuclei findings и jobs для web-dashboard.
@@ -83,7 +87,7 @@ Docker:
 
 ```bash
 cp .env.example .env
-# отредактировать WEB_API_KEY
+# отредактировать AUTH_JWT_SECRET и AUTH_BOOTSTRAP_ADMIN_PASSWORD
 docker compose up --build
 ```
 
@@ -93,14 +97,15 @@ docker compose up --build
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export WEB_API_KEY="local-dev-key"
+export AUTH_JWT_SECRET="local-jwt-secret"
+export AUTH_BOOTSTRAP_ADMIN_PASSWORD="very-long-local-admin-password"
 uvicorn app.main:app --reload
 ```
 
 Worker:
 
 ```bash
-export WEB_API_KEY="local-dev-key"
+export AUTH_JWT_SECRET="local-jwt-secret"
 python -m app.worker
 ```
 
@@ -198,11 +203,15 @@ pytest
 
 - Старые CLI-функции часто используют `Prompt.ask` и `input()`. Их нельзя напрямую вызывать из web worker.
 - Web API должен работать только с разрешёнными task types из registry.
+- API использует Bearer JWT, а не постоянный API key. Старый `WEB_API_KEY` оставлен только как legacy fallback для JWT secret.
+- Роли: `viewer` читает, `analyst` создаёт проекты/scope/jobs, `admin` управляет users/audit.
+- Первый admin создаётся из `AUTH_BOOTSTRAP_ADMIN_USERNAME` и `AUTH_BOOTSTRAP_ADMIN_PASSWORD`, только если таблица users пустая.
+- JWT-сессии хранят `jti` в SQLite `auth_sessions`; logout отзывает текущую сессию.
+- Audit log хранится в SQLite `audit_events`; логировать login/logout, управление пользователями и mutating project/job actions.
 - Реальные dashboard-метрики берутся через `GET /api/projects/{project_name}/dashboard`.
 - `scope.domains` - ручной разрешённый scope. Не записывать туда найденные поддомены; для recon-результатов использовать `recon/subdomains/subdomains.json`.
 - `dns-records` использует `dnspython`, не требует системного binary и пишет `recon/dns_records/dns_records.json`.
-- `WEB_API_KEY` обязателен, если `WEB_AUTH_DISABLED=false`.
-- Браузер не читает `.env`; frontend должен просить пользователя вставить `WEB_API_KEY` в поле `X-API-Key`. Если `WEB_AUTH_DISABLED=true`, frontend не должен блокировать действия из-за пустого key field.
+- `AUTH_JWT_SECRET` обязателен, если `WEB_AUTH_DISABLED=false`. `WEB_AUTH_DISABLED=true` допустим только для локального стенда.
 - Demo `example.com` в UI не является реальным проектом. Нельзя запускать jobs или сохранять scope, пока `state.selectedProject` пустой.
 - Docker-образ тяжёлый, потому что основан на Kali и ставит pentest tools.
 - Go-based tools собираются в отдельном Docker builder stage и копируются в runtime как готовые binaries. Не добавлять `build` в `worker`, иначе Compose снова начнёт собирать один и тот же image дважды.
@@ -218,6 +227,7 @@ pytest
 
 - Добавлен FastAPI web/API слой.
 - Добавлена статическая web-панель в dark cybersecurity dashboard стиле.
+- Добавлена login/password авторизация, JWT-сессии, роли пользователей и audit log.
 - Добавлен live dashboard aggregator для реальных subdomains, DNS records, HTTP probe, findings и jobs.
 - Добавлена SQLite-очередь задач.
 - Добавлен worker.
@@ -232,7 +242,7 @@ pytest
 
 - Web покрывает первые задачи: `subfinder`, `dns-records`, `httpx-root`, `nuclei`.
 - Большая часть старых CLI-модулей ещё не вынесена в неинтерактивные сервисы.
-- Нет полноценной multi-user авторизации и RBAC.
+- Управление пользователями в UI пока минимальное: create/list/audit.
 - Нет отмены задач.
 
 ## 15. TODO / Roadmap
@@ -240,8 +250,7 @@ pytest
 - Перенести `nmap`, URL discovery, ffuf, reports в web task registry.
 - Добавить PostgreSQL и Redis/RQ или Celery для production-подобного режима.
 - Добавить отмену задач и лимиты параллелизма.
-- Добавить audit log.
-- Добавить роли пользователей.
+- Добавить reset password / disable user / edit role в UI.
 - Добавить scheduler.
 - Добавить экспорт отчётов через web.
 - Добавить интеграционные тесты API.

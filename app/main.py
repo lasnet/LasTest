@@ -6,8 +6,10 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.auth_routes import router as auth_router
 from app.api.routes import router as api_router
 from app.core.settings import get_settings
+from app.services.auth import AuthStore, jwt_secret
 from app.services.jobs import JobStore
 from app.services.paths import ensure_runtime_dirs
 
@@ -16,8 +18,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
     ensure_runtime_dirs(settings)
     JobStore(settings).ensure_schema()
+    auth_store = AuthStore(settings)
+    auth_store.ensure_schema()
+    auth_store.bootstrap_admin_from_env()
 
     app = FastAPI(title=settings.app_name)
+    app.include_router(auth_router)
     app.include_router(api_router)
 
     @app.middleware("http")
@@ -34,7 +40,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "app": settings.app_name,
             "auth_required": auth_required,
-            "auth_configured": bool(settings.web_api_key) if auth_required else True,
+            "auth_configured": bool(jwt_secret(settings)) if auth_required else True,
+            "setup_required": auth_store.setup_required(),
         }
 
     static_dir = Path(__file__).resolve().parent / "static"

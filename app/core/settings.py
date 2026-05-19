@@ -36,6 +36,10 @@ class Settings:
     app_env: str = "local"
     web_api_key: str = ""
     web_auth_disabled: bool = False
+    auth_jwt_secret: str = ""
+    auth_token_ttl_minutes: int = 480
+    auth_bootstrap_admin_username: str = "admin"
+    auth_bootstrap_admin_password: str = ""
     projects_dir: Path = Path("projects")
     data_dir: Path = Path("data")
     logs_dir: Path = Path("logs")
@@ -51,6 +55,16 @@ class Settings:
             app_env=os.getenv("APP_ENV", cls.app_env),
             web_api_key=os.getenv("WEB_API_KEY", "").strip(),
             web_auth_disabled=_as_bool(os.getenv("WEB_AUTH_DISABLED"), False),
+            auth_jwt_secret=os.getenv("AUTH_JWT_SECRET", "").strip(),
+            auth_token_ttl_minutes=_as_int(
+                os.getenv("AUTH_TOKEN_TTL_MINUTES"), cls.auth_token_ttl_minutes
+            ),
+            auth_bootstrap_admin_username=os.getenv(
+                "AUTH_BOOTSTRAP_ADMIN_USERNAME", cls.auth_bootstrap_admin_username
+            ).strip(),
+            auth_bootstrap_admin_password=os.getenv(
+                "AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""
+            ),
             projects_dir=Path(os.getenv("PROJECTS_DIR", str(cls.projects_dir))),
             data_dir=Path(os.getenv("DATA_DIR", str(cls.data_dir))),
             logs_dir=Path(os.getenv("LOGS_DIR", str(cls.logs_dir))),
@@ -70,4 +84,3 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.from_env()
-

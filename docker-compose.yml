@@ -7,8 +7,12 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
       APP_ENV: ${APP_ENV:-local}
-      WEB_API_KEY: ${WEB_API_KEY:?Set WEB_API_KEY in .env before starting}
+      WEB_API_KEY: ${WEB_API_KEY:-}
       WEB_AUTH_DISABLED: ${WEB_AUTH_DISABLED:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      AUTH_TOKEN_TTL_MINUTES: ${AUTH_TOKEN_TTL_MINUTES:-480}
+      AUTH_BOOTSTRAP_ADMIN_USERNAME: ${AUTH_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      AUTH_BOOTSTRAP_ADMIN_PASSWORD: ${AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
       PROJECTS_DIR: /app/projects
       DATA_DIR: /app/data
       LOGS_DIR: /app/logs
@@ -37,8 +41,12 @@ services:
     command: python -m app.worker
     environment:
       APP_ENV: ${APP_ENV:-local}
-      WEB_API_KEY: ${WEB_API_KEY:?Set WEB_API_KEY in .env before starting}
+      WEB_API_KEY: ${WEB_API_KEY:-}
       WEB_AUTH_DISABLED: ${WEB_AUTH_DISABLED:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      AUTH_TOKEN_TTL_MINUTES: ${AUTH_TOKEN_TTL_MINUTES:-480}
+      AUTH_BOOTSTRAP_ADMIN_USERNAME: ${AUTH_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      AUTH_BOOTSTRAP_ADMIN_PASSWORD: ${AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
       PROJECTS_DIR: /app/projects
       DATA_DIR: /app/data
       LOGS_DIR: /app/logs

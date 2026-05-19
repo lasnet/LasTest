@@ -359,19 +359,23 @@ dd {
   gap: 14px;
 }
 
-.api-key-form {
+.user-menu {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.api-key-form input {
-  width: 210px;
-  height: 44px;
+.user-menu strong {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .auth-state {
-  min-width: 92px;
+  min-width: 86px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -382,6 +386,40 @@ dd {
 
 .auth-state.warn {
   color: var(--yellow);
+}
+
+.login-screen {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 52% 38%, rgba(0, 170, 255, 0.12), transparent 34%),
+    rgba(7, 11, 18, 0.92);
+  padding: 22px;
+  backdrop-filter: blur(10px);
+}
+
+.login-panel {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(10, 16, 26, 0.96);
+  box-shadow: var(--shadow);
+  padding: 26px;
+}
+
+.login-panel h2 {
+  font-size: 26px;
+}
+
+.login-panel p:not(.section-label) {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .clock {
@@ -916,6 +954,49 @@ dd {
   scroll-margin-top: 90px;
 }
 
+.admin-panel {
+  scroll-margin-top: 90px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.7fr) minmax(280px, 1fr) minmax(320px, 1.2fr);
+  gap: 16px;
+}
+
+.admin-form,
+.admin-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-grid h3 {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.admin-row {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: rgba(8, 14, 24, 0.72);
+  padding: 10px;
+}
+
+.admin-row strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.admin-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .assets-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1025,6 +1106,7 @@ dd {
   }
 
   .metric-grid,
+  .admin-grid,
   .assets-grid,
   .config-grid,
   .scope-form {
