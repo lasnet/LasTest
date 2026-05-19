@@ -4,6 +4,7 @@ from app.services.validation import (
     normalize_domain,
     normalize_domains,
     normalize_ip,
+    normalize_scope_exclusions,
     normalize_severities,
     validate_project_name,
 )
@@ -26,6 +27,14 @@ class ValidationTest(unittest.TestCase):
         self.assertEqual(normalize_ip("127.0.0.1"), "127.0.0.1")
         with self.assertRaises(ValueError):
             normalize_ip("999.1.1.1")
+
+    def test_normalize_scope_exclusions(self):
+        self.assertEqual(
+            normalize_scope_exclusions(["Legacy.EXAMPLE.com.", "10.0.0.1", "10.0.0.0/8"]),
+            ["10.0.0.0/8", "10.0.0.1", "legacy.example.com"],
+        )
+        with self.assertRaises(ValueError):
+            normalize_scope_exclusions(["not a valid exclusion"])
 
     def test_normalize_severities(self):
         self.assertEqual(normalize_severities("High, critical, high"), "high,critical")

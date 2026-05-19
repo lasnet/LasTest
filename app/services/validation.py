@@ -37,6 +37,23 @@ def normalize_ip(value: str) -> str:
         raise ValueError(f"Invalid IP address: {value}") from exc
 
 
+def normalize_scope_exclusion(value: str) -> str:
+    raw = str(value or "").strip().lower().rstrip(".")
+    if not raw:
+        raise ValueError("Invalid empty exclusion")
+
+    if "/" in raw:
+        try:
+            return str(ipaddress.ip_network(raw, strict=False))
+        except ValueError as exc:
+            raise ValueError(f"Invalid exclusion: {value}") from exc
+
+    try:
+        return normalize_ip(raw)
+    except ValueError:
+        return normalize_domain(raw)
+
+
 def normalize_domains(values: list[str] | None) -> list[str]:
     normalized = [normalize_domain(item) for item in values or []]
     return sorted(dict.fromkeys(normalized))
@@ -44,6 +61,11 @@ def normalize_domains(values: list[str] | None) -> list[str]:
 
 def normalize_ips(values: list[str] | None) -> list[str]:
     normalized = [normalize_ip(item) for item in values or []]
+    return sorted(dict.fromkeys(normalized))
+
+
+def normalize_scope_exclusions(values: list[str] | None) -> list[str]:
+    normalized = [normalize_scope_exclusion(item) for item in values or []]
     return sorted(dict.fromkeys(normalized))
 
 
@@ -68,4 +90,3 @@ def normalize_severities(value: str | list[str] | None) -> str:
     if not items:
         raise ValueError("At least one nuclei severity is required")
     return ",".join(items)
-

@@ -14,6 +14,7 @@ class CreateProjectRequest(BaseModel):
 class ScopeUpdateRequest(BaseModel):
     domains: list[str] | None = None
     ips: list[str] | None = None
+    exclusions: list[str] | None = None
     replace: bool = False
 
 
@@ -24,4 +25,3 @@ class CreateJobRequest(BaseModel):
 
 class ApiMessage(BaseModel):
     message: str
-

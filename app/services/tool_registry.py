@@ -9,6 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import dns.exception
+import dns.resolver
+
 from app.core.settings import Settings, get_settings
 from app.services.projects import get_project, merge_project_config, project_path
 from app.services.validation import normalize_domain, normalize_domains, normalize_severities
@@ -37,6 +40,12 @@ TASK_SPECS = {
         title="HTTPX Root Probe",
         description="HTTP probing for discovered subdomains.",
         required_tools=("httpx",),
+    ),
+    "dns-records": TaskSpec(
+        task_type="dns-records",
+        title="DNS Records",
+        description="Resolve A, AAAA, CNAME, MX, NS and TXT records for scoped assets.",
+        required_tools=(),
     ),
     "nuclei": TaskSpec(
         task_type="nuclei",
@@ -91,6 +100,8 @@ def run_task(
         return _run_subfinder(project_name, params, log, settings)
     if task == "httpx-root":
         return _run_httpx_root(project_name, params, log, settings)
+    if task == "dns-records":
+        return _run_dns_records(project_name, params, log, settings)
     if task == "nuclei":
         return _run_nuclei(project_name, params, log, settings)
     raise ValueError(f"Unsupported task type: {task}")
@@ -127,9 +138,17 @@ def _run_command(
     return result.returncode, result.stdout or ""
 
 
+def _list_param(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.replace(",", "\n").splitlines() if item.strip()]
+    return list(value)
+
+
 def _scope_domains(project_name: str, params: dict[str, Any], settings: Settings) -> list[str]:
     if "domains" in params:
-        return normalize_domains(params.get("domains") or [])
+        return normalize_domains(_list_param(params.get("domains")))
 
     config = get_project(project_name, settings)
     domains = normalize_domains(config.get("scope", {}).get("domains", []) or [])
@@ -147,6 +166,12 @@ def _subdomains_dir(project_name: str, settings: Settings) -> Path:
 
 def _httpx_dir(project_name: str, settings: Settings) -> Path:
     path = project_path(project_name, settings) / "recon" / "httpx"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _dns_records_dir(project_name: str, settings: Settings) -> Path:
+    path = project_path(project_name, settings) / "recon" / "dns_records"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -222,7 +247,14 @@ def _run_subfinder(
     _save_subdomains(project_name, "subfinder", unique, settings)
     merge_project_config(
         project_name,
-        {"scope": {"domains": sorted(dict.fromkeys([*domains, *unique]))}},
+        {
+            "recon": {
+                "subdomains": {
+                    "count": len(unique),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            }
+        },
         settings,
     )
     return {"domains_scanned": domains, "found": len(unique), "output": str(out_dir)}
@@ -234,10 +266,12 @@ def _run_httpx_root(
     log: LogWriter,
     settings: Settings,
 ) -> dict[str, Any]:
-    targets = params.get("targets") or _load_subdomains(project_name, settings)
+    targets = _list_param(params.get("targets")) or _load_subdomains(project_name, settings)
+    if not targets:
+        targets = _scope_domains(project_name, {}, settings)
     targets = sorted(dict.fromkeys(str(item).strip() for item in targets if str(item).strip()))
     if not targets:
-        raise RuntimeError("No subdomains found. Run subfinder first or pass targets.")
+        raise RuntimeError("No DNS targets found. Add scope, run subfinder, or pass targets.")
 
     out_dir = _httpx_dir(project_name, settings)
     input_file = out_dir / "input.txt"
@@ -270,15 +304,17 @@ def _run_httpx_root(
 
     alive_hosts = [
         {
-            "url": item.get("url"),
-            "host": item.get("host"),
+            "url": item.get("url") or item.get("input"),
+            "host": item.get("host") or item.get("input"),
             "scheme": item.get("scheme"),
-            "status_code": item.get("status_code"),
+            "port": item.get("port"),
+            "status_code": item.get("status_code") or item.get("status-code"),
             "title": item.get("title"),
-            "tech": item.get("tech", []),
+            "webserver": item.get("webserver") or item.get("server"),
+            "tech": item.get("tech") or item.get("technologies", []),
         }
         for item in raw_data
-        if item.get("url")
+        if item.get("url") or item.get("input")
     ]
     alive_urls = [item["url"] for item in alive_hosts]
 
@@ -305,6 +341,103 @@ def _run_httpx_root(
         settings,
     )
     return {"targets": len(targets), "alive": len(alive_urls), "output": str(out_dir)}
+
+
+def _run_dns_records(
+    project_name: str,
+    params: dict[str, Any],
+    log: LogWriter,
+    settings: Settings,
+) -> dict[str, Any]:
+    config = get_project(project_name, settings)
+    scope_roots = normalize_domains(config.get("scope", {}).get("domains", []) or [])
+    if not scope_roots:
+        raise RuntimeError("Project scope has no domains")
+
+    explicit_targets = _list_param(params.get("targets"))
+    if explicit_targets:
+        targets = [normalize_domain(str(item)) for item in explicit_targets]
+        targets = [
+            item
+            for item in targets
+            if any(item == root or item.endswith(f".{root}") for root in scope_roots)
+        ]
+    else:
+        targets = [*scope_roots, *_load_subdomains(project_name, settings)]
+
+    targets = sorted(dict.fromkeys(targets))
+    max_hosts = int(params.get("max_hosts") or 500)
+    targets = targets[: max(1, min(max_hosts, 5000))]
+    if not targets:
+        raise RuntimeError("No in-scope DNS targets to resolve")
+
+    record_types = _list_param(params.get("record_types")) or ["A", "AAAA", "CNAME", "MX", "NS", "TXT"]
+    record_types = [str(item).upper().strip() for item in record_types if str(item).strip()]
+    allowed_types = {"A", "AAAA", "CNAME", "MX", "NS", "TXT"}
+    record_types = [item for item in dict.fromkeys(record_types) if item in allowed_types]
+    if not record_types:
+        raise RuntimeError("No supported DNS record types requested")
+
+    resolver = dns.resolver.Resolver()
+    resolver.lifetime = float(params.get("lifetime") or 5)
+    resolver.timeout = float(params.get("timeout") or 3)
+
+    hosts: list[dict[str, Any]] = []
+    total_records = 0
+    for host in targets:
+        log(f"Resolving DNS records for {host}")
+        records: dict[str, list[str]] = {}
+        errors: dict[str, str] = {}
+        for record_type in record_types:
+            try:
+                answers = resolver.resolve(host, record_type, raise_on_no_answer=False)
+            except dns.resolver.NXDOMAIN:
+                errors[record_type] = "NXDOMAIN"
+                continue
+            except dns.resolver.NoNameservers:
+                errors[record_type] = "No nameservers"
+                continue
+            except dns.resolver.LifetimeTimeout:
+                errors[record_type] = "Timeout"
+                continue
+            except dns.exception.DNSException as exc:
+                errors[record_type] = exc.__class__.__name__
+                continue
+
+            values = [answer.to_text().strip('"') for answer in answers if answer.to_text()]
+            if values:
+                records[record_type] = sorted(dict.fromkeys(values))
+                total_records += len(records[record_type])
+
+        if records or errors:
+            hosts.append({"host": host, "records": records, "errors": errors})
+
+    out_dir = _dns_records_dir(project_name, settings)
+    (out_dir / "dns_records.json").write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now().isoformat(),
+                "count": len(hosts),
+                "records": total_records,
+                "record_types": record_types,
+                "hosts": hosts,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    merge_project_config(
+        project_name,
+        {"recon": {"dns_records": {"hosts": len(hosts), "records": total_records}}},
+        settings,
+    )
+    return {
+        "targets": len(targets),
+        "hosts": len(hosts),
+        "records": total_records,
+        "output": str(out_dir),
+    }
 
 
 def _load_alive_targets(project_name: str, settings: Settings) -> list[str]:
@@ -335,7 +468,7 @@ def _run_nuclei(
     log: LogWriter,
     settings: Settings,
 ) -> dict[str, Any]:
-    targets = params.get("targets") or _load_alive_targets(project_name, settings)
+    targets = _list_param(params.get("targets")) or _load_alive_targets(project_name, settings)
     targets = sorted(dict.fromkeys(str(item).strip() for item in targets if str(item).strip()))
     if not targets:
         raise RuntimeError("No alive HTTP targets found. Run httpx-root first.")

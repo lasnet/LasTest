@@ -11,6 +11,7 @@ from app.services.paths import resolve_path
 from app.services.validation import (
     normalize_domains,
     normalize_ips,
+    normalize_scope_exclusions,
     validate_project_name,
 )
 
@@ -130,6 +131,7 @@ def update_scope(
     project_name: str,
     domains: list[str] | None = None,
     ips: list[str] | None = None,
+    exclusions: list[str] | None = None,
     replace: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
@@ -145,6 +147,11 @@ def update_scope(
         incoming = normalize_ips(ips)
         existing = [] if replace else scope.get("ips", []) or []
         scope["ips"] = sorted(dict.fromkeys([*existing, *incoming]))
+
+    if exclusions is not None:
+        incoming = normalize_scope_exclusions(exclusions)
+        existing = [] if replace else scope.get("exclusions", []) or []
+        scope["exclusions"] = sorted(dict.fromkeys([*existing, *incoming]))
 
     _save_yaml(_config_path(project_name, settings), config)
     return config
@@ -167,4 +174,3 @@ def merge_project_config(
     merge_dict(config, updates)
     _save_yaml(_config_path(project_name, settings), config)
     return config
-

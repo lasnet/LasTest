@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.core.security import require_api_key
 from app.models.schemas import CreateJobRequest, CreateProjectRequest, ScopeUpdateRequest
+from app.services.dashboard import build_project_dashboard
 from app.services.jobs import JobStore
 from app.services.projects import create_project, get_project, list_projects, update_scope
 from app.services.tool_registry import available_tasks, validate_task_type
@@ -42,10 +43,26 @@ def project_detail(project_name: str):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/projects/{project_name}/dashboard")
+def project_dashboard(project_name: str):
+    try:
+        return build_project_dashboard(project_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.put("/projects/{project_name}/scope")
 def update_project_scope(project_name: str, payload: ScopeUpdateRequest):
     try:
-        return update_scope(project_name, payload.domains, payload.ips, payload.replace)
+        return update_scope(
+            project_name,
+            payload.domains,
+            payload.ips,
+            payload.exclusions,
+            payload.replace,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -90,4 +107,3 @@ def job_log(job_id: str):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(content=content, media_type="text/plain; charset=utf-8")
-

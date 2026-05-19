@@ -3,6 +3,7 @@ const state = {
   selectedProject: localStorage.getItem("lastest_project") || "",
   projects: [],
   projectDetail: null,
+  dashboard: null,
   jobs: [],
 };
 
@@ -65,6 +66,12 @@ function showNotice(message) {
 }
 
 function detail() {
+  if (state.dashboard?.project) {
+    return {
+      project: state.dashboard.project,
+      scope: state.dashboard.scope || {},
+    };
+  }
   return state.projectDetail || demoProject;
 }
 
@@ -87,7 +94,7 @@ function subtitle() {
 }
 
 function isRealProject() {
-  return Boolean(state.projectDetail);
+  return Boolean(state.projectDetail || state.dashboard);
 }
 
 async function api(path, options = {}) {
@@ -148,14 +155,40 @@ function renderProjectSelector() {
 }
 
 function metricValues() {
+  if (state.dashboard?.metrics) {
+    const metrics = state.dashboard.metrics;
+    return {
+      domains: metrics.domains || 0,
+      ips: metrics.ips || 0,
+      exclusions: metrics.exclusions || 0,
+      subdomains: metrics.subdomains || 0,
+      dnsHosts: metrics.dns_hosts || 0,
+      alive: metrics.alive_hosts || 0,
+      openPorts: metrics.open_ports || 0,
+      findings: metrics.findings || 0,
+      critical: metrics.critical || 0,
+      high: metrics.high || 0,
+      medium: metrics.medium || 0,
+      low: metrics.low || 0,
+      info: metrics.info || 0,
+    };
+  }
+
   if (!isRealProject()) {
     return {
       domains: 2,
       ips: 3,
       exclusions: 2,
       subdomains: 128,
+      dnsHosts: 3,
       alive: 34,
       openPorts: 12,
+      findings: 5,
+      critical: 1,
+      high: 2,
+      medium: 1,
+      low: 1,
+      info: 7,
     };
   }
 
@@ -170,8 +203,15 @@ function metricValues() {
     ips: ips.length,
     exclusions: exclusions.length,
     subdomains,
+    dnsHosts: 0,
     alive,
     openPorts: Math.max(0, ips.length * 4),
+    findings: 0,
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0,
   };
 }
 
@@ -186,26 +226,42 @@ function renderHeaderAndMetrics() {
   qs("#metric-subdomains").textContent = values.subdomains;
   qs("#metric-alive").textContent = values.alive;
   qs("#metric-ports").textContent = values.openPorts;
+  qs("#metric-findings").textContent = values.findings;
   qs("#metric-subdomains-delta").textContent =
-    isRealProject() ? `+${Math.max(values.domains, 0)} in scope` : "+18 new";
-  qs("#metric-alive-delta").textContent = isRealProject() ? `${values.alive} calculated` : "+7 new";
+    isRealProject() ? `${values.dnsHosts} DNS hosts` : "+18 new";
+  qs("#metric-alive-delta").textContent = isRealProject() ? `${values.alive} alive targets` : "+7 new";
+  qs("#metric-ports-delta").textContent = isRealProject() ? "from HTTP probe" : "+2 new";
+  qs("#metric-findings-delta").textContent =
+    isRealProject() ? `${values.critical} critical / ${values.high} high` : "-1 resolved";
 
-  qs("#stat-ipv4").textContent = values.ips || 45;
-  qs("#stat-domains").textContent = values.domains || 2;
-  qs("#stat-subdomains").textContent = values.subdomains || 128;
-  qs("#stat-alive").textContent = values.alive || 34;
-  qs("#assets-badge").textContent = Math.max(values.domains + values.ips, 0) || 128;
+  qs("#stat-ipv4").textContent = isRealProject() ? values.ips : 45;
+  qs("#stat-dns-hosts").textContent = isRealProject() ? values.dnsHosts : 3;
+  qs("#stat-domains").textContent = isRealProject() ? values.domains : 2;
+  qs("#stat-subdomains").textContent = isRealProject() ? values.subdomains : 128;
+  qs("#stat-alive").textContent = isRealProject() ? values.alive : 34;
+  qs("#assets-badge").textContent = isRealProject()
+    ? values.domains + values.ips + values.subdomains + values.alive
+    : 128;
+  qs("#findings-badge").textContent = isRealProject() ? values.findings : 5;
+  qs("#scans-badge").textContent = isRealProject() ? state.jobs.length : 12;
+  qs("#last-discovery").textContent = state.dashboard
+    ? `Last discovery: ${lastFinishedScanTime()}`
+    : "Last discovery: 2m ago";
+  qs("#freshness-state").textContent = state.dashboard ? "Live data" : "Demo data";
+  renderFindingsOverview(values);
 }
 
 function renderScopeForm() {
   const scope = currentScope();
   qs("#scope-form textarea[name='domains']").value = (scope.domains || []).join("\n");
   qs("#scope-form textarea[name='ips']").value = (scope.ips || []).join("\n");
+  qs("#scope-form textarea[name='exclusions']").value = (scope.exclusions || []).join("\n");
 }
 
 function renderLastScans() {
-  const rows = state.jobs.length
-    ? state.jobs.slice(0, 5).map((job) => [
+  const scans = state.dashboard?.scans?.length ? state.dashboard.scans : state.jobs;
+  const rows = scans.length
+    ? scans.slice(0, 5).map((job) => [
         titleCase(job.task_type || "scan"),
         job.created_at || "-",
         normalizeStatus(job.status),
@@ -231,7 +287,19 @@ function renderLastScans() {
 }
 
 function renderActivity() {
-  const rows = state.jobs.length
+  const rows = state.dashboard?.activity?.length
+    ? state.dashboard.activity.slice(0, 5).map((item) => [
+        shortTime(item.time),
+        item.status === "failed" ? "[!]" : item.status === "running" ? "[~]" : "[OK]",
+        item.event || "Scan activity",
+        titleCase(item.task),
+        item.asset || "-",
+        "-",
+        item.detail || "-",
+        item.status === "failed" ? "danger" : item.status === "running" ? "warn" : "ok",
+        item.status === "failed" ? "red" : item.status === "running" ? "yellow" : "green",
+      ])
+    : state.jobs.length
     ? state.jobs.slice(0, 5).map((job) => [
         shortTime(job.created_at),
         job.status === "failed" ? "[!]" : job.status === "running" ? "[~]" : "[OK]",
@@ -262,12 +330,61 @@ function renderActivity() {
     .join("");
 }
 
+function renderFindingsOverview(values) {
+  qs("#finding-critical").textContent = values.critical;
+  qs("#finding-high").textContent = values.high;
+  qs("#finding-medium").textContent = values.medium;
+  qs("#finding-low").textContent = values.low;
+  qs("#finding-info").textContent = values.info;
+  qs("#finding-total").textContent = isRealProject() ? values.findings : 12;
+}
+
+function renderReconAssets() {
+  const assets = state.dashboard?.assets || {};
+  const subdomains = assets.subdomains || [];
+  const dnsRecords = assets.dns_records || [];
+  const aliveHosts = assets.alive_hosts || [];
+
+  qs("#subdomain-list").innerHTML = subdomains.length
+    ? subdomains.slice(0, 12).map((host) => assetItem(host, "Discovered subdomain")).join("")
+    : emptyState("No subdomains yet. Run Subdomains.");
+
+  qs("#dns-record-list").innerHTML = dnsRecords.length
+    ? dnsRecords.slice(0, 12).map((item) => {
+        const recordTypes = Object.keys(item.records || {}).join(", ") || "no records";
+        return assetItem(item.host, recordTypes);
+      }).join("")
+    : emptyState("No DNS records yet. Run DNS Records.");
+
+  qs("#http-probe-list").innerHTML = aliveHosts.length
+    ? aliveHosts.slice(0, 12).map((item) => {
+        const tech = Array.isArray(item.tech) ? item.tech.join(", ") : item.tech || "";
+        const detailText = [item.status_code, item.webserver, tech].filter(Boolean).join(" / ") || "alive";
+        return assetItem(item.url || item.host, detailText);
+      }).join("")
+    : emptyState("No alive HTTP hosts yet. Run HTTP Probe.");
+}
+
+function assetItem(title, subtitleText) {
+  return `
+    <div class="asset-item">
+      <strong title="${esc(title)}">${esc(title || "-")}</strong>
+      <span title="${esc(subtitleText)}">${esc(subtitleText || "-")}</span>
+    </div>
+  `;
+}
+
+function emptyState(text) {
+  return `<div class="empty-state">${esc(text)}</div>`;
+}
+
 function renderAll() {
   renderProjectSelector();
   renderHeaderAndMetrics();
   renderScopeForm();
   renderLastScans();
   renderActivity();
+  renderReconAssets();
 }
 
 function titleCase(value) {
@@ -296,6 +413,12 @@ function shortTime(value) {
   return date.toISOString().slice(11, 19);
 }
 
+function lastFinishedScanTime() {
+  const finished = state.jobs.find((job) => job.finished_at || job.started_at || job.created_at);
+  if (!finished) return "waiting";
+  return shortTime(finished.finished_at || finished.started_at || finished.created_at);
+}
+
 async function loadProjects() {
   const data = await api("/api/projects");
   state.projects = data.projects || [];
@@ -315,6 +438,15 @@ async function loadProjectDetail() {
   state.projectDetail = await api(`/api/projects/${encodeURIComponent(state.selectedProject)}`);
 }
 
+async function loadDashboard() {
+  if (!state.selectedProject) {
+    state.dashboard = null;
+    return;
+  }
+  state.dashboard = await api(`/api/projects/${encodeURIComponent(state.selectedProject)}/dashboard`);
+  state.jobs = state.dashboard.scans || [];
+}
+
 async function loadJobs() {
   if (!state.selectedProject) {
     state.jobs = [];
@@ -328,11 +460,15 @@ async function refreshData() {
   await loadProjects();
   await loadProjectDetail().catch(() => {
     state.projectDetail = null;
+    state.dashboard = null;
     state.selectedProject = "";
     localStorage.removeItem("lastest_project");
   });
-  await loadJobs().catch(() => {
-    state.jobs = [];
+  await loadDashboard().catch(() => {
+    state.dashboard = null;
+    return loadJobs().catch(() => {
+      state.jobs = [];
+    });
   });
   renderAll();
 }
@@ -343,8 +479,40 @@ async function selectProject(name) {
     localStorage.setItem("lastest_project", name);
   }
   await loadProjectDetail();
-  await loadJobs();
+  await loadDashboard().catch(() => loadJobs());
   renderAll();
+}
+
+async function enqueueTask(taskType, button) {
+  if (!state.apiKey) {
+    showNotice("Set X-API-Key first.");
+    return;
+  }
+  if (!state.selectedProject) {
+    showNotice("Create or select a project first.");
+    return;
+  }
+
+  const original = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Queued...";
+  }
+  try {
+    await api(`/api/projects/${encodeURIComponent(state.selectedProject)}/jobs`, {
+      method: "POST",
+      body: JSON.stringify({ task_type: taskType, params: {} }),
+    });
+    await refreshData();
+    showNotice(`${titleCase(taskType)} task queued.`);
+  } catch (error) {
+    showNotice(error.message);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
 }
 
 async function boot() {
@@ -425,6 +593,7 @@ qs("#scope-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({
         domains: lines(form.get("domains")),
         ips: lines(form.get("ips")),
+        exclusions: lines(form.get("exclusions")),
         replace: Boolean(form.get("replace")),
       }),
     });
@@ -439,6 +608,16 @@ qs("#refresh-detail").addEventListener("click", () => {
   refreshData().catch((error) => showNotice(error.message));
 });
 
+qs("#refresh-recon").addEventListener("click", () => {
+  refreshData().catch((error) => showNotice(error.message));
+});
+
+qsa(".run-task").forEach((button) => {
+  button.addEventListener("click", () => {
+    enqueueTask(button.dataset.task, button);
+  });
+});
+
 qsa(".nav-list a").forEach((link) => {
   link.addEventListener("click", () => {
     qsa(".nav-list a").forEach((item) => item.classList.remove("active"));
@@ -450,10 +629,12 @@ boot();
 setInterval(formatUtcClock, 1000);
 setInterval(() => {
   if (!state.apiKey || !state.selectedProject) return;
-  loadJobs()
+  loadDashboard()
     .then(() => {
+      renderHeaderAndMetrics();
       renderLastScans();
       renderActivity();
+      renderReconAssets();
     })
     .catch(() => {});
 }, 7000);
