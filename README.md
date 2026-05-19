@@ -226,6 +226,7 @@ curl -H "X-API-Key: $WEB_API_KEY" http://localhost:8000/api/projects
 - `Missing required tools` - нужный binary не установлен или отсутствует в `PATH`.
 - Docker build долго идёт - образ ставит Kali-пакеты и Go-based инструменты.
 - `no space left on device` при Docker build - очистите старые Docker-слои командой `docker system prune -af` и проверьте место через `docker system df`; Dockerfile уже не сохраняет Go build cache в финальном образе.
+- `api` перезапускается или unhealthy сразу после старта - проверьте `docker compose logs api --tail=100`; частая причина на bind mounts - права на `./projects`, `./data`, `./logs`. Entrypoint контейнера создаёт эти директории, исправляет владельца и запускает процесс от `appuser`.
 - `nuclei` не находит шаблоны - обновите templates внутри контейнера или worker-среды.
 - Нет результатов `httpx-root` - сначала запустите `subfinder` или передайте targets через API.
 - Старые CLI-модули запрашивают ввод - это ожидаемо; web должен использовать неинтерактивные сервисы из `app/services/`.

@@ -72,9 +72,10 @@ COPY . .
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/projects /app/data /app/logs \
+    && chmod +x /app/docker-entrypoint.sh \
     && chown -R appuser:appuser /app /opt/venv /opt/go
 
-USER appuser
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 EXPOSE 8000
 
