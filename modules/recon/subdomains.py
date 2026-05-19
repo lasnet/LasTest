@@ -29,9 +29,7 @@ except ImportError:
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # _IPV6_RE = re.compile(r"\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b")
 
-# findomain_fb_token="FB_TOKEN" \
-# findomain_virustotal_token="VT_TOKEN" \
-# findomain_securitytrails_token="ST_TOKEN" \
+# Optional findomain tokens should be provided through environment variables.
 # findomain -t 9958258.ru -q
 
 console = Console()

@@ -1,8 +1,9 @@
 rich
 prompt_toolkit
-pyyaml
+PyYAML
 jinja2
 requests
 python-nmap
-pyyaml
 dnspython
+fastapi
+uvicorn[standard]

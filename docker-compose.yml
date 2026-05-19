@@ -1,0 +1,61 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lastest-pentest-platform:local
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      WEB_API_KEY: ${WEB_API_KEY:?Set WEB_API_KEY in .env before starting}
+      WEB_AUTH_DISABLED: ${WEB_AUTH_DISABLED:-false}
+      PROJECTS_DIR: /app/projects
+      DATA_DIR: /app/data
+      LOGS_DIR: /app/logs
+      DATABASE_URL: sqlite:////app/data/lastest.sqlite3
+      JOB_POLL_INTERVAL_SEC: ${JOB_POLL_INTERVAL_SEC:-2}
+      COMMAND_TIMEOUT_SEC: ${COMMAND_TIMEOUT_SEC:-3600}
+      CENSYS_PERSONAL_ACCESS_TOKEN: ${CENSYS_PERSONAL_ACCESS_TOKEN:-}
+      FINDOMAIN_VIRUSTOTAL_TOKEN: ${FINDOMAIN_VIRUSTOTAL_TOKEN:-}
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    volumes:
+      - ./projects:/app/projects
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/health >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    image: lastest-pentest-platform:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m app.worker
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      WEB_API_KEY: ${WEB_API_KEY:?Set WEB_API_KEY in .env before starting}
+      WEB_AUTH_DISABLED: ${WEB_AUTH_DISABLED:-false}
+      PROJECTS_DIR: /app/projects
+      DATA_DIR: /app/data
+      LOGS_DIR: /app/logs
+      DATABASE_URL: sqlite:////app/data/lastest.sqlite3
+      JOB_POLL_INTERVAL_SEC: ${JOB_POLL_INTERVAL_SEC:-2}
+      COMMAND_TIMEOUT_SEC: ${COMMAND_TIMEOUT_SEC:-3600}
+      CENSYS_PERSONAL_ACCESS_TOKEN: ${CENSYS_PERSONAL_ACCESS_TOKEN:-}
+      FINDOMAIN_VIRUSTOTAL_TOKEN: ${FINDOMAIN_VIRUSTOTAL_TOKEN:-}
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}
+    volumes:
+      - ./projects:/app/projects
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

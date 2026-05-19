@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LasTest</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LasTest</p>
+        <h1>Pentest Control Panel</h1>
+      </div>
+      <form id="api-key-form" class="key-form">
+        <input id="api-key" type="password" autocomplete="off" placeholder="X-API-Key" />
+        <button type="submit">Save key</button>
+      </form>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Projects</h2>
+          <button id="refresh-projects" type="button">Refresh</button>
+        </div>
+
+        <form id="create-project-form" class="stack">
+          <input name="name" placeholder="project-name" required minlength="2" maxlength="63" />
+          <input name="client" placeholder="client" />
+          <input name="description" placeholder="description" />
+          <button type="submit">Create project</button>
+        </form>
+
+        <div id="projects-list" class="list"></div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panel-head">
+          <h2 id="project-title">No project selected</h2>
+          <button id="refresh-detail" type="button">Reload</button>
+        </div>
+
+        <div id="project-detail" class="detail muted">Select or create a project.</div>
+
+        <div class="split">
+          <form id="scope-form" class="stack">
+            <label>
+              Domains
+              <textarea name="domains" rows="5" placeholder="example.com&#10;corp.example.com"></textarea>
+            </label>
+            <label>
+              IP addresses
+              <textarea name="ips" rows="5" placeholder="10.10.10.10&#10;192.168.1.0"></textarea>
+            </label>
+            <label class="inline">
+              <input type="checkbox" name="replace" />
+              Replace current scope
+            </label>
+            <button type="submit">Save scope</button>
+          </form>
+
+          <div class="stack">
+            <h3>Tasks</h3>
+            <div id="task-list" class="task-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <div class="panel-head">
+          <h2>Jobs</h2>
+          <button id="refresh-jobs" type="button">Refresh</button>
+        </div>
+        <div id="jobs-list" class="jobs"></div>
+        <pre id="job-log" class="log" hidden></pre>
+      </section>
+    </main>
+
+    <div id="notice" class="notice" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
