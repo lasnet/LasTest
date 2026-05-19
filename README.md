@@ -136,7 +136,15 @@ docker compose up --build
 http://localhost:8000
 ```
 
-В поле `X-API-Key` вставьте значение `WEB_API_KEY` из `.env`.
+В поле `X-API-Key` в правом верхнем углу вставьте значение `WEB_API_KEY` из `.env` и сохраните его кнопкой рядом с полем. `.env` доступен контейнеру/backend, но браузер не может прочитать его автоматически.
+
+Для полностью локального стенда можно временно отключить проверку ключа:
+
+```bash
+WEB_AUTH_DISABLED=true
+```
+
+В таком режиме UI будет работать без заполнения `X-API-Key`. Не используйте этот режим на доступном извне сервере.
 
 Проверить health endpoint:
 
@@ -232,7 +240,8 @@ curl -H "X-API-Key: $WEB_API_KEY" \
 ## 13. Типичные проблемы и их решение
 
 - `WEB_API_KEY is not configured` - задайте `WEB_API_KEY` в `.env`.
-- `Invalid or missing API key` - в web UI указан неверный ключ.
+- `Invalid or missing API key` или `Key needed` в UI - вставьте значение `WEB_API_KEY` из `.env` в поле `X-API-Key` в правом верхнем углу и нажмите кнопку сохранения.
+- `Create or select a project first` - `example.com` на пустом стенде является demo-preview, а не реальным проектом. Создайте проект через `+ New project` или выберите существующий.
 - `Missing required tools` - нужный binary не установлен или отсутствует в `PATH`.
 - Docker build долго идёт - образ ставит Kali-пакеты и Go-based инструменты.
 - `no space left on device` при Docker build - очистите старые Docker-слои командой `docker system prune -af` и проверьте место через `docker system df`; Dockerfile уже не сохраняет Go build cache в финальном образе.

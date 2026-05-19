@@ -29,10 +29,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health():
+        auth_required = not settings.web_auth_disabled
         return {
             "status": "ok",
             "app": settings.app_name,
-            "auth_configured": bool(settings.web_api_key) or settings.web_auth_disabled,
+            "auth_required": auth_required,
+            "auth_configured": bool(settings.web_api_key) if auth_required else True,
         }
 
     static_dir = Path(__file__).resolve().parent / "static"

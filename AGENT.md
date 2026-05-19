@@ -202,6 +202,8 @@ pytest
 - `scope.domains` - ручной разрешённый scope. Не записывать туда найденные поддомены; для recon-результатов использовать `recon/subdomains/subdomains.json`.
 - `dns-records` использует `dnspython`, не требует системного binary и пишет `recon/dns_records/dns_records.json`.
 - `WEB_API_KEY` обязателен, если `WEB_AUTH_DISABLED=false`.
+- Браузер не читает `.env`; frontend должен просить пользователя вставить `WEB_API_KEY` в поле `X-API-Key`. Если `WEB_AUTH_DISABLED=true`, frontend не должен блокировать действия из-за пустого key field.
+- Demo `example.com` в UI не является реальным проектом. Нельзя запускать jobs или сохранять scope, пока `state.selectedProject` пустой.
 - Docker-образ тяжёлый, потому что основан на Kali и ставит pentest tools.
 - Go-based tools собираются в отдельном Docker builder stage и копируются в runtime как готовые binaries. Не добавлять `build` в `worker`, иначе Compose снова начнёт собирать один и тот же image дважды.
 - Go-based tools ставятся на этапе build, поэтому нужен доступ к сети.

@@ -1,5 +1,7 @@
 const state = {
   apiKey: localStorage.getItem("lastest_api_key") || "",
+  authRequired: true,
+  authConfigured: false,
   selectedProject: localStorage.getItem("lastest_project") || "",
   projects: [],
   projectDetail: null,
@@ -115,6 +117,9 @@ async function api(path, options = {}) {
     } catch (_) {
       detailText = await response.text();
     }
+    if (response.status === 401) {
+      detailText = "Invalid API key. Paste WEB_API_KEY from .env into X-API-Key and save it.";
+    }
     throw new Error(detailText);
   }
 
@@ -123,6 +128,46 @@ async function api(path, options = {}) {
     return response.json();
   }
   return response.text();
+}
+
+async function loadRuntimeStatus() {
+  try {
+    const status = await api("/api/health");
+    state.authRequired = Boolean(status.auth_required);
+    state.authConfigured = Boolean(status.auth_configured);
+  } catch (_) {
+    state.authRequired = true;
+    state.authConfigured = false;
+  }
+}
+
+function hasApiAccess() {
+  return !state.authRequired || Boolean(state.apiKey);
+}
+
+function authHelpMessage() {
+  if (!state.authConfigured) {
+    return "WEB_API_KEY is not configured on the server.";
+  }
+  return "Paste WEB_API_KEY from .env into X-API-Key and save it first.";
+}
+
+function renderAuthState() {
+  const item = qs("#auth-state");
+  if (!state.authRequired) {
+    item.textContent = "Auth off";
+    item.className = "auth-state ok";
+    qs("#api-key").placeholder = "Auth disabled";
+    return;
+  }
+  if (state.apiKey) {
+    item.textContent = "Key saved";
+    item.className = "auth-state ok";
+    return;
+  }
+  item.textContent = "Key needed";
+  item.className = "auth-state warn";
+  qs("#api-key").placeholder = "WEB_API_KEY from .env";
 }
 
 function formatUtcClock() {
@@ -140,7 +185,7 @@ function renderProjectSelector() {
   if (!state.projects.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "example.com";
+    option.textContent = "Create a project";
     select.appendChild(option);
     return;
   }
@@ -424,6 +469,12 @@ async function loadProjects() {
   state.projects = data.projects || [];
   const selectedExists = state.projects.some((project) => project.name === state.selectedProject);
 
+  if (!state.projects.length) {
+    state.selectedProject = "";
+    localStorage.removeItem("lastest_project");
+    return;
+  }
+
   if ((!state.selectedProject || !selectedExists) && state.projects.length) {
     state.selectedProject = state.projects[0].name;
     localStorage.setItem("lastest_project", state.selectedProject);
@@ -484,8 +535,8 @@ async function selectProject(name) {
 }
 
 async function enqueueTask(taskType, button) {
-  if (!state.apiKey) {
-    showNotice("Set X-API-Key first.");
+  if (!hasApiAccess()) {
+    showNotice(authHelpMessage());
     return;
   }
   if (!state.selectedProject) {
@@ -516,11 +567,14 @@ async function enqueueTask(taskType, button) {
 }
 
 async function boot() {
+  await loadRuntimeStatus();
   qs("#api-key").value = state.apiKey;
   formatUtcClock();
+  renderAuthState();
   renderAll();
 
-  if (!state.apiKey) {
+  if (!hasApiAccess()) {
+    qs("#create-project-form").hidden = false;
     return;
   }
 
@@ -535,6 +589,7 @@ qs("#api-key-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   state.apiKey = qs("#api-key").value.trim();
   localStorage.setItem("lastest_api_key", state.apiKey);
+  renderAuthState();
   await boot();
   showNotice("API key saved.");
 });
@@ -546,8 +601,8 @@ qs("#new-project-toggle").addEventListener("click", () => {
 
 qs("#create-project-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!state.apiKey) {
-    showNotice("Set X-API-Key first.");
+  if (!hasApiAccess()) {
+    showNotice(authHelpMessage());
     return;
   }
 
@@ -581,6 +636,10 @@ qs("#project-select").addEventListener("change", async (event) => {
 
 qs("#scope-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!hasApiAccess()) {
+    showNotice(authHelpMessage());
+    return;
+  }
   if (!state.selectedProject) {
     showNotice("Create or select a project first.");
     return;

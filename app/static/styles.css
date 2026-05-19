@@ -370,6 +370,20 @@ dd {
   height: 44px;
 }
 
+.auth-state {
+  min-width: 92px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-state.ok {
+  color: var(--green);
+}
+
+.auth-state.warn {
+  color: var(--yellow);
+}
+
 .clock {
   display: flex;
   align-items: center;
