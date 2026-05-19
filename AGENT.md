@@ -198,6 +198,7 @@ pytest
 - Go-based tools собираются в отдельном Docker builder stage и копируются в runtime как готовые binaries. Не добавлять `build` в `worker`, иначе Compose снова начнёт собирать один и тот же image дважды.
 - Go-based tools ставятся на этапе build, поэтому нужен доступ к сети.
 - Контейнер стартует через `docker-entrypoint.sh`: он чинит права на bind mounts `projects/data/logs`, затем запускает команду от `appuser`. Не возвращать `USER appuser` без альтернативного способа исправить права на host-mounted директории.
+- `app/main.py` добавляет `Cache-Control: no-store` для `/` и `/static/*`, а HTML подключает CSS/JS с version query. Это нужно, чтобы браузер не показывал старый или неоформленный UI после пересборки контейнера.
 - SQLite подходит для локального single-host режима. Для multi-user и высокой параллельности нужен PostgreSQL/Redis.
 - Не выводить секреты в логи job.
 

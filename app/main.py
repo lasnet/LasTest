@@ -20,6 +20,13 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     app.include_router(api_router)
 
+    @app.middleware("http")
+    async def add_static_cache_headers(request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+        return response
+
     @app.get("/api/health")
     def health():
         return {
@@ -39,4 +46,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
