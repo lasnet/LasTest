@@ -3,82 +3,232 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LasTest</title>
+    <title>Pentest Platform</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">LasTest</p>
-        <h1>Pentest Control Panel</h1>
-      </div>
-      <form id="api-key-form" class="key-form">
-        <input id="api-key" type="password" autocomplete="off" placeholder="X-API-Key" />
-        <button type="submit">Save key</button>
-      </form>
-    </header>
-
-    <main class="layout">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Projects</h2>
-          <button id="refresh-projects" type="button">Refresh</button>
-        </div>
-
-        <form id="create-project-form" class="stack">
-          <input name="name" placeholder="project-name" required minlength="2" maxlength="63" />
-          <input name="client" placeholder="client" />
-          <input name="description" placeholder="description" />
-          <button type="submit">Create project</button>
-        </form>
-
-        <div id="projects-list" class="list"></div>
-      </section>
-
-      <section class="panel wide">
-        <div class="panel-head">
-          <h2 id="project-title">No project selected</h2>
-          <button id="refresh-detail" type="button">Reload</button>
-        </div>
-
-        <div id="project-detail" class="detail muted">Select or create a project.</div>
-
-        <div class="split">
-          <form id="scope-form" class="stack">
-            <label>
-              Domains
-              <textarea name="domains" rows="5" placeholder="example.com&#10;corp.example.com"></textarea>
-            </label>
-            <label>
-              IP addresses
-              <textarea name="ips" rows="5" placeholder="10.10.10.10&#10;192.168.1.0"></textarea>
-            </label>
-            <label class="inline">
-              <input type="checkbox" name="replace" />
-              Replace current scope
-            </label>
-            <button type="submit">Save scope</button>
-          </form>
-
-          <div class="stack">
-            <h3>Tasks</h3>
-            <div id="task-list" class="task-list"></div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <div class="brand-mark">PP</div>
+          <div>
+            <p class="eyebrow">Pentest Platform</p>
+            <h1>Command Center</h1>
           </div>
         </div>
-      </section>
 
-      <section class="panel wide">
-        <div class="panel-head">
-          <h2>Jobs</h2>
-          <button id="refresh-jobs" type="button">Refresh</button>
-        </div>
-        <div id="jobs-list" class="jobs"></div>
-        <pre id="job-log" class="log" hidden></pre>
-      </section>
-    </main>
+        <section class="workspace-block">
+          <label for="project-select">Workspace</label>
+          <select id="project-select" aria-label="Current project"></select>
+          <div class="current-project">
+            <span class="status-dot green"></span>
+            <span>Current project:</span>
+            <strong id="sidebar-current-project">example.com</strong>
+          </div>
+          <button id="new-project-toggle" class="button secondary full" type="button">
+            New Project
+          </button>
+        </section>
+
+        <form id="create-project-form" class="project-form" hidden>
+          <label>
+            Project slug
+            <input name="name" placeholder="example.com" required minlength="2" maxlength="63" />
+          </label>
+          <label>
+            Client
+            <input name="client" placeholder="External Pentest Project" />
+          </label>
+          <label>
+            Description
+            <input name="description" placeholder="Authorized external assessment" />
+          </label>
+          <button class="button primary full" type="submit">Create Project</button>
+        </form>
+
+        <nav class="side-nav" aria-label="Main navigation">
+          <p>Overview</p>
+          <a class="active" href="#dashboard">Dashboard</a>
+          <a href="#attack-surface">Attack Surface</a>
+          <a href="#assets">Assets</a>
+
+          <p>Recon</p>
+          <a href="#subdomains">Subdomains</a>
+          <a href="#dns-records">DNS Records</a>
+          <a href="#http-probe">HTTP Probe</a>
+          <a href="#urls">URLs</a>
+          <a href="#technologies">Technologies</a>
+
+          <p>Scanning</p>
+          <a href="#nmap">Nmap</a>
+          <a href="#nuclei">Nuclei</a>
+          <a href="#web-fuzzing">Web Fuzzing</a>
+          <a href="#custom-tasks">Custom Tasks</a>
+
+          <p>Reporting</p>
+          <a href="#findings">Findings</a>
+          <a href="#reports">Reports</a>
+          <a href="#exports">Exports</a>
+
+          <p>System</p>
+          <a href="#settings">Settings</a>
+          <a href="#logs">Logs</a>
+        </nav>
+      </aside>
+
+      <div class="main-shell">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="signal-pill">
+              <span class="status-dot blue"></span>
+              External attack surface
+            </div>
+            <div class="signal-pill muted-pill">
+              API status: <span id="api-status">waiting</span>
+            </div>
+          </div>
+
+          <form id="api-key-form" class="key-form">
+            <input id="api-key" type="password" autocomplete="off" placeholder="X-API-Key" />
+            <button class="button secondary" type="submit">Save Key</button>
+          </form>
+        </header>
+
+        <main id="dashboard" class="dashboard">
+          <section class="hero-panel">
+            <div>
+              <p class="eyebrow">Project</p>
+              <h2 id="project-title">example.com</h2>
+              <p id="project-subtitle" class="subtitle">External Pentest Project</p>
+              <div id="scope-summary" class="scope-summary">
+                <span>Domains: 3</span>
+                <span>IPs: 12</span>
+                <span>Exclusions: 2</span>
+              </div>
+            </div>
+
+            <div class="hero-actions">
+              <button class="button primary" type="button" disabled>Run Recon</button>
+              <button class="button secondary" type="button" disabled>New Scan</button>
+              <button class="button secondary" type="button" disabled>Generate Report</button>
+            </div>
+          </section>
+
+          <section class="metric-grid" aria-label="Dashboard metrics">
+            <article class="metric-card cyan">
+              <p>Subdomains</p>
+              <strong id="metric-subdomains">671</strong>
+              <span id="metric-subdomains-detail">231 alive</span>
+            </article>
+            <article class="metric-card green">
+              <p>Open Ports</p>
+              <strong>47</strong>
+              <span>9 public services</span>
+            </article>
+            <article class="metric-card red">
+              <p>Vulnerabilities</p>
+              <strong>18</strong>
+              <span>2 critical / 5 high</span>
+            </article>
+            <article class="metric-card yellow">
+              <p>Reports</p>
+              <strong>4</strong>
+              <span>last generated today</span>
+            </article>
+          </section>
+
+          <div class="content-grid">
+            <section class="left-column">
+              <article id="attack-surface" class="panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Map</p>
+                    <h3>Attack Surface Map</h3>
+                  </div>
+                  <span class="chip blue">live scope</span>
+                </div>
+                <div id="attack-tree" class="attack-tree"></div>
+              </article>
+
+              <article id="findings" class="panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Triage</p>
+                    <h3>Recent Findings</h3>
+                  </div>
+                  <span class="chip red">18 findings</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Severity</th>
+                        <th>Finding</th>
+                        <th>Asset</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="findings-table"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <section class="right-column">
+              <article id="settings" class="panel scope-panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Settings</p>
+                    <h3>Project Scope</h3>
+                  </div>
+                  <button id="refresh-detail" class="button ghost" type="button">Reload</button>
+                </div>
+
+                <form id="scope-form" class="scope-form">
+                  <label>
+                    Domains
+                    <textarea name="domains" rows="5" placeholder="example.com&#10;api.example.com"></textarea>
+                  </label>
+                  <label>
+                    IP addresses
+                    <textarea name="ips" rows="5" placeholder="10.10.10.10&#10;192.168.1.10"></textarea>
+                  </label>
+                  <label class="check-row">
+                    <input type="checkbox" name="replace" />
+                    Replace current scope
+                  </label>
+                  <button class="button primary full" type="submit">Save Scope</button>
+                </form>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Activity</p>
+                    <h3>Running Scans</h3>
+                  </div>
+                  <button id="refresh-jobs" class="button ghost" type="button">Refresh</button>
+                </div>
+                <div id="running-scans" class="scan-widget"></div>
+              </article>
+
+              <article id="logs" class="panel terminal-panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Terminal</p>
+                    <h3>Scan Log</h3>
+                  </div>
+                  <span class="chip green">stream</span>
+                </div>
+                <pre id="terminal-log" class="terminal-log"></pre>
+              </article>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
 
     <div id="notice" class="notice" hidden></div>
     <script src="/static/app.js"></script>
   </body>
 </html>
-

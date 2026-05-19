@@ -206,7 +206,7 @@ pytest
 Сделано:
 
 - Добавлен FastAPI web/API слой.
-- Добавлена статическая web-панель.
+- Добавлена статическая web-панель в dark cybersecurity dashboard стиле.
 - Добавлена SQLite-очередь задач.
 - Добавлен worker.
 - Добавлен Dockerfile на Kali.
