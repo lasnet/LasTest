@@ -18,7 +18,14 @@ docker image inspect ghcr.io/lasnet/lastest:dev --format '{{index .RepoDigests 0
 
 ## 2. Подготовить Compose
 
-При первой установке создайте `.env.v2` командой `cp .env.v2.example .env.v2`. Укажите полученный digest в `LASTEST_IMAGE`. Со стандартными настройками API доступен на `127.0.0.1:8080`. Для HTTP на loopback либо в доверенной локальной сети выставьте `LASTEST_SECURE_COOKIES=false`. Для HTTPS через reverse proxy оставьте `true`. Внутренние диапазоны для сканирования задаются отдельно в `LASTEST_INTERNAL_RANGES`.
+При первой установке создайте `.env.v2` командой `cp .env.v2.example .env.v2`. Укажите полученный digest в `LASTEST_IMAGE`. Адрес публикации задаётся через `LASTEST_HOST_IP`, порт через `LASTEST_PORT`. Для HTTP на loopback либо в доверенной локальной сети выставьте `LASTEST_SECURE_COOKIES=false`. Для HTTPS через reverse proxy оставьте `true`. Внутренние диапазоны для сканирования задаются отдельно в `LASTEST_INTERNAL_RANGES`.
+
+| Доступ | Настройка `LASTEST_HOST_IP` |
+| --- | --- |
+| С самого Docker-хоста или через локальный HTTPS-прокси | `127.0.0.1` по умолчанию |
+| С Docker-хоста и других машин в доверенной LAN или VPN | IP сетевого интерфейса Docker-хоста, например `192.168.1.50`. На обеих машинах используйте этот адрес. |
+
+После изменения адреса примени настройки командой `up` из шага 4. Значение `0.0.0.0` означает публикацию на всех IPv4-интерфейсах хоста.
 
 ```bash
 docker compose --env-file .env.v2 -f compose.v2.yaml config -q
@@ -62,7 +69,7 @@ docker compose --env-file .env.v2 -f compose.v2.yaml run --rm api doctor
 
 ## 5. TLS и reverse proxy
 
-Приложение не завершает TLS само. Рабочая схема: trusted reverse proxy на том же хосте, API слушает только loopback.
+Для HTTPS используйте доверенный reverse proxy на Docker-хосте и задайте `LASTEST_HOST_IP=127.0.0.1`.
 
 Пример Caddy:
 
@@ -123,3 +130,14 @@ docker build -f Dockerfile.v2 -t lastest-v2:local .
 ```
 
 Для этого режима задайте `LASTEST_IMAGE=lastest-v2:local` и запускайте Compose с `--pull never`.
+
+### Полная пересборка с чистой базой
+
+Запустите команды в каталоге LasTest. После успешной сборки `down -v` удалит том `lastest-v2-data` с учётными записями, проектами и результатами.
+
+```bash
+docker build --pull --no-cache -f Dockerfile.v2 -t lastest-v2:local . &&
+docker compose --env-file .env.v2 -f compose.v2.yaml down -v
+```
+
+Установите `LASTEST_IMAGE=lastest-v2:local` и нужный `LASTEST_HOST_IP` в `.env.v2`, выполните шаг 3 для создания администратора и шаг 4 для запуска сервисов.

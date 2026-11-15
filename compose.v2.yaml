@@ -19,7 +19,9 @@ services:
       LASTEST_CENSYS_API_SECRET: "${LASTEST_CENSYS_API_SECRET:-}"
       LASTEST_NMAP_PATH: "${LASTEST_NMAP_PATH:-}"
     ports:
-      - "127.0.0.1:${LASTEST_PORT:-8080}:8080"
+      - target: 8080
+        published: "${LASTEST_PORT:-8080}"
+        host_ip: "${LASTEST_HOST_IP:-127.0.0.1}"
     volumes:
       - lastest-data:/data
     security_opt:
