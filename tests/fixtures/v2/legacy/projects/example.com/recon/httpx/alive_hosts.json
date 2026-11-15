@@ -1,0 +1,6 @@
+{
+  "count": 1,
+  "hosts": [
+    {"url": "https://www.example.com", "host": "www.example.com", "scheme": "https", "status_code": 200, "title": "Example", "tech": ["nginx"], "webserver": "nginx/1.24.0"}
+  ]
+}

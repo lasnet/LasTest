@@ -1,0 +1,8 @@
+{
+  "generated_at": "2024-01-04T12:00:00",
+  "count": 2,
+  "findings": [
+    {"template_id": "tls-version", "name": "TLS issue", "severity": "high", "host": "https://www.example.com", "matched_at": "https://www.example.com", "description": "fixture", "references": []},
+    {"template_id": "info-disclosure", "name": "Info leak", "severity": "info", "host": "https://api.example.com", "matched_at": "https://api.example.com/v1", "description": "fixture", "references": []}
+  ]
+}

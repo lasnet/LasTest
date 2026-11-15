@@ -1,6 +1,10 @@
 .env
 .env.*
 !.env.example
+!/.env.v2.example
+
+/task.md
+/target/
 
 venv/
 .venv/
@@ -23,10 +27,18 @@ build/
 logs/
 data/
 projects/
+!/tests/fixtures/v2/legacy/projects/
+/lastest-data/
 *.log
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 *.db
+*.db-shm
+*.db-wal
 
 .DS_Store
 .idea/

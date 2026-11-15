@@ -1,0 +1,59 @@
+[package]
+name = "lastest"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.100"
+license = "MIT"
+description = "LasTest 2.0 - local-first authorized security assessment platform"
+
+[lib]
+name = "lastest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lastest"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+axum = { version = "0.8", features = ["macros", "http1", "http2", "json", "query", "tokio"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+csv = "1.3"
+fs2 = "0.4"
+hickory-resolver = { version = "0.24", features = ["tokio", "system-config"] }
+idna = "1.0"
+ipnet = "2.11"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip", "brotli", "deflate", "charset", "http2"] }
+roxmltree = "0.20"
+rpassword = "7.3"
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "fs", "io-util", "process"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid = { version = "1.17", features = ["v4", "serde"] }
+webpki-roots = "1.0"
+x509-parser = "0.16"
+
+[dev-dependencies]
+tempfile = "3.20"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true
+codegen-units = 1

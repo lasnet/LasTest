@@ -1,0 +1,35 @@
+{
+  "catalog_version": 1,
+  "rules": [
+    {
+      "id": "web.hsts_missing",
+      "version": 1,
+      "severity": "medium",
+      "applies_to": "HTTPS responses",
+      "condition": "Strict-Transport-Security is missing, invalid, or has max-age=0",
+      "evidence": "final URL and header presence; no response body"
+    },
+    {
+      "id": "web.tls_cert_expiry",
+      "version": 1,
+      "severity": "high",
+      "applies_to": "HTTPS responses with a readable certificate",
+      "condition": "certificate expires within tls_expiry_warning_days; expired certificates are critical",
+      "evidence": "not_after, days_remaining and configured threshold",
+      "measurement_error": "no finding; reported as a source/measurement error"
+    },
+    {
+      "id": "web.cookie_secure_missing",
+      "version": 1,
+      "severity": "medium",
+      "applies_to": "HTTPS responses setting an explicitly configured session cookie",
+      "condition": "configured cookie name is set without the Secure attribute",
+      "evidence": "cookie name and attributes only; cookie values are never stored"
+    }
+  ],
+  "excluded": [
+    "full Nuclei template language and template updates",
+    "browser JavaScript crawling and headless checks",
+    "OSINT, phishing and schedule automation"
+  ]
+}

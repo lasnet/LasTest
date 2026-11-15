@@ -1,0 +1,18 @@
+project:
+  name: example.com
+  client: ACME Fixture
+  description: Synthetic LasTest 1.x project
+  created_at: "2024-01-02"
+scope:
+  domains:
+    - example.com
+    - www.example.com
+    - api.example.com
+  ips:
+    - 203.0.113.10
+  exclusions:
+    - admin.example.com
+recon:
+  httpx:
+    root_alive_hosts:
+      - https://www.example.com

@@ -1,0 +1,7 @@
+{
+  "count": 2,
+  "urls": [
+    {"url": "https://www.example.com/login", "source": "passive"},
+    {"url": "https://outside.example.net/path", "source": "passive"}
+  ]
+}

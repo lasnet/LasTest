@@ -1,0 +1,17 @@
+{
+  "catalog_version": 1,
+  "description": "Bounded technology hints stored with each HTTP observation. This is not a full fingerprinting engine.",
+  "rules": [
+    {"name": "nginx", "source": "header:server", "match": "server contains nginx"},
+    {"name": "apache", "source": "header:server", "match": "server contains apache"},
+    {"name": "cloudflare", "source": "header:server", "match": "server contains cloudflare"},
+    {"name": "microsoft-iis", "source": "header:server", "match": "server contains microsoft-iis"},
+    {"name": "caddy", "source": "header:server", "match": "server contains caddy"},
+    {"name": "x-powered-by", "source": "header:x-powered-by", "match": "product and version when present"},
+    {"name": "php", "source": "cookie", "match": "Set-Cookie contains PHPSESSID"},
+    {"name": "java", "source": "cookie", "match": "Set-Cookie contains JSESSIONID"},
+    {"name": "wordpress", "source": "body", "match": "body contains wp-content or wordpress"},
+    {"name": "next.js", "source": "body", "match": "body contains _next/static"},
+    {"name": "angular", "source": "body", "match": "body contains ng-version"}
+  ]
+}

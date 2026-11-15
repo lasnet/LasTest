@@ -1,0 +1,61 @@
+# LasTest 2.0 deployment configuration template.
+# Copy outside the source tree, adjust, and set LASTEST_CONFIG=/path/to/lastest.toml.
+# Environment variables documented in docs/v2/install.md override key settings.
+
+data_dir = "/data"
+bind = "0.0.0.0:8080"
+# Set true only when the browser reaches the API through a trusted HTTPS proxy.
+secure_cookies = true
+session_ttl_hours = 12
+cli_token_ttl_hours = 24
+login_max_attempts = 5
+login_lock_minutes = 15
+
+# Only explicitly approved internal ranges are reachable. Metadata addresses
+# (169.254.169.254, fd00:ec2::254, 100.100.100.200) are always blocked.
+internal_ranges = []
+
+worker_poll_ms = 500
+worker_lease_seconds = 60
+max_concurrent_jobs = 1
+http_timeout_seconds = 10
+max_body_bytes = 2097152
+max_redirects = 5
+max_queue_targets = 5000
+max_artifact_bytes = 8388608
+max_crawl_pages = 200
+max_crawl_depth = 3
+max_wordlist_entries = 5000
+retention_days = 90
+
+# Fixed provider endpoints. Operators cannot override these per request.
+certspotter_url = "https://api.certspotter.com/v1/issuances"
+certspotter_token = ""
+wayback_url = "https://web.archive.org/cdx/search/cdx"
+commoncrawl_url = "https://index.commoncrawl.org/collinfo.json"
+shodan_internetdb_url = "https://internetdb.shodan.io"
+censys_url = "https://search.censys.io/api/v2/hosts"
+censys_api_id = ""
+censys_api_secret = ""
+
+# Optional DNS server (host:port) for split-horizon/local stands.
+# dns_server = "127.0.0.1:5353"
+
+session_cookie_names = ["session", "sessionid"]
+tls_expiry_warning_days = 30
+
+# Optional Nmap adapter. The profile is fixed to unprivileged TCP service
+# detection; raw packets, OS detection and NSE are outside this release.
+# nmap_path = "/usr/bin/nmap"
+nmap_timeout_seconds = 120
+nmap_max_output_bytes = 4194304
+
+# Administered SOCKS5 profiles. The worker passes the validated IP, not a name.
+# [[socks5_profiles]]
+# name = "test-stand"
+# host = "127.0.0.1"
+# port = 1080
+# username = ""
+# password = ""
+
+log_level = "info"

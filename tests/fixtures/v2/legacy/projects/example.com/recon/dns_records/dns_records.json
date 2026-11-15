@@ -1,0 +1,7 @@
+{
+  "count": 2,
+  "hosts": [
+    {"host": "example.com", "records": {"A": ["203.0.113.10"], "MX": ["10 mail.example.com"]}},
+    {"host": "www.example.com", "records": {"CNAME": ["example.com"], "A": ["203.0.113.10"]}}
+  ]
+}

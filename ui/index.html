@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LasTest 2.0</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login-view" class="login-shell">
+    <main class="login-card" aria-labelledby="login-title">
+      <h1 id="login-title">LasTest <span>2.0</span></h1>
+      <p class="muted">Authorized local security assessment. Use only on explicitly approved targets.</p>
+      <form id="login-form">
+        <label for="login-username">Username</label>
+        <input id="login-username" name="username" autocomplete="username" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit" class="primary">Sign in</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </main>
+  </div>
+
+  <div id="app-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand">LasTest <span>2.0</span></div>
+      <nav aria-label="Main navigation">
+        <a href="#dashboard" data-view-link="dashboard">Dashboard</a>
+        <a href="#scope" data-view-link="scope">Scope</a>
+        <a href="#scans" data-view-link="scans">Scans</a>
+        <a href="#assets" data-view-link="assets">Assets</a>
+        <a href="#findings" data-view-link="findings">Findings</a>
+        <a href="#reports" data-view-link="reports">Reports</a>
+        <a href="#users" data-view-link="users" data-admin-only hidden>Users</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="current-user" class="muted"></span>
+        <button id="logout-button" class="link">Log out</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <label for="project-select">Project</label>
+          <select id="project-select">
+            <option value="">Select a project…</option>
+          </select>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-button" class="secondary">Refresh</button>
+          <button id="new-project-button" class="secondary">New project</button>
+        </div>
+      </header>
+
+      <section id="new-project-panel" class="panel" hidden aria-labelledby="new-project-title">
+        <h2 id="new-project-title">Create project</h2>
+        <form id="new-project-form" class="grid-form">
+          <label for="project-name">Name</label>
+          <input id="project-name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="64">
+          <label for="project-client">Client</label>
+          <input id="project-client">
+          <label for="project-description">Description</label>
+          <input id="project-description">
+          <button type="submit" class="primary">Create</button>
+        </form>
+      </section>
+
+      <div id="notice" class="notice" role="status" hidden></div>
+
+      <section data-view="dashboard" class="view" hidden aria-labelledby="dashboard-title">
+        <h2 id="dashboard-title">Dashboard</h2>
+        <div id="dashboard-empty" class="empty" hidden></div>
+        <div id="dashboard-content">
+          <div id="dashboard-metrics" class="metrics"></div>
+          <div class="columns">
+            <div class="panel">
+              <h3>Recent jobs</h3>
+              <div id="dashboard-jobs"></div>
+            </div>
+            <div class="panel">
+              <h3>Source availability</h3>
+              <div id="dashboard-availability"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>HTTP observations</h3>
+            <div id="dashboard-http"></div>
+          </div>
+          <div class="panel">
+            <h3>Ports</h3>
+            <div id="dashboard-ports"></div>
+          </div>
+          <div class="panel">
+            <h3>Web check coverage</h3>
+            <div id="dashboard-coverage"></div>
+          </div>
+        </div>
+      </section>
+
+      <section data-view="scope" class="view" hidden aria-labelledby="scope-title">
+        <h2 id="scope-title">Scope</h2>
+        <div id="scope-status" class="panel"></div>
+        <div class="panel">
+          <h3>Rules</h3>
+          <p class="muted">Exclusions take priority. DNS names, IPs and CIDRs are normalized. Editing creates a new immutable revision.</p>
+          <div id="scope-rules"></div>
+          <div class="rule-editor">
+            <label for="rule-kind">Kind</label>
+            <select id="rule-kind">
+              <option value="exact_domain">Exact DNS name</option>
+              <option value="subdomain_tree">DNS tree with subdomains</option>
+              <option value="ip">IPv4/IPv6 address</option>
+              <option value="cidr">CIDR range</option>
+            </select>
+            <label for="rule-value">Value</label>
+            <input id="rule-value" placeholder="example.com">
+            <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
+            <button id="add-rule-button" class="secondary">Add rule</button>
+          </div>
+          <label for="scope-note">Revision note</label>
+          <input id="scope-note" placeholder="Why this revision changed">
+          <div class="button-row">
+            <button id="save-scope-button" class="secondary">Save draft</button>
+            <button id="save-approve-scope-button" class="primary">Save and approve</button>
+            <button id="approve-scope-button" class="primary">Approve current revision</button>
+          </div>
+          <p id="scope-error" class="error" role="alert"></p>
+        </div>
+        <div class="panel">
+          <h3>Revision history</h3>
+          <div id="scope-history"></div>
+        </div>
+      </section>
+
+      <section data-view="scans" class="view" hidden aria-labelledby="scans-title">
+        <h2 id="scans-title">Scans</h2>
+        <div class="panel">
+          <h3>Submit job</h3>
+          <p class="muted">Parameters are typed JSON. Explicit targets must be inside the approved scope. The worker never runs shell strings.</p>
+          <label for="task-type">Task type</label>
+          <select id="task-type"></select>
+          <p id="task-availability" class="muted"></p>
+          <label for="task-params">Parameters (JSON)</label>
+          <textarea id="task-params" rows="6" spellcheck="false">{}</textarea>
+          <label for="idempotency-key">Idempotency key (optional)</label>
+          <input id="idempotency-key">
+          <div class="button-row">
+            <button id="submit-job-button" class="primary">Submit</button>
+            <button id="submit-chain-button" class="secondary">Run All in one chain</button>
+          </div>
+          <p id="scan-error" class="error" role="alert"></p>
+        </div>
+        <div class="panel">
+          <h3>Job history</h3>
+          <div id="jobs-list"></div>
+        </div>
+      </section>
+
+      <section data-view="assets" class="view" hidden aria-labelledby="assets-title">
+        <h2 id="assets-title">Assets</h2>
+        <div class="panel"><h3>Hosts</h3><div id="assets-hosts"></div></div>
+        <div class="panel"><h3>IP addresses</h3><div id="assets-ips"></div></div>
+        <div class="panel"><h3>URLs</h3><div id="assets-urls"></div></div>
+      </section>
+
+      <section data-view="findings" class="view" hidden aria-labelledby="findings-title">
+        <h2 id="findings-title">Findings</h2>
+        <div id="findings-summary" class="metrics"></div>
+        <div class="panel"><div id="findings-table"></div></div>
+      </section>
+
+      <section data-view="reports" class="view" hidden aria-labelledby="reports-title">
+        <h2 id="reports-title">Reports</h2>
+        <div class="panel">
+          <p>Reports are built from the current normalized project snapshot. JSON includes scope, history, DNS, HTTP, services, sources and findings. CSV neutralizes external values that could be interpreted as formulas.</p>
+          <div class="button-row">
+            <button id="export-json-button" class="primary">Export JSON</button>
+            <button id="export-csv-button" class="secondary">Export CSV</button>
+          </div>
+        </div>
+      </section>
+
+      <section data-view="users" class="view" hidden aria-labelledby="users-title">
+        <h2 id="users-title">Users and audit</h2>
+        <div class="panel">
+          <h3>Create user</h3>
+          <form id="user-form" class="grid-form">
+            <label for="user-username">Username</label>
+            <input id="user-username" required>
+            <label for="user-password">Password (12+ characters)</label>
+            <input id="user-password" type="password" required minlength="12">
+            <label for="user-role">Role</label>
+            <select id="user-role"><option value="viewer">viewer</option><option value="analyst">analyst</option><option value="admin">admin</option></select>
+            <button type="submit" class="primary">Create user</button>
+          </form>
+          <p id="user-error" class="error" role="alert"></p>
+        </div>
+        <div class="panel"><h3>Users</h3><div id="users-list"></div></div>
+        <div class="panel"><h3>Audit log</h3><div id="audit-list"></div></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

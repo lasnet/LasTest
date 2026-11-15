@@ -1,0 +1,108 @@
+name: LasTest 2.0
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "src/**"
+      - "migrations/**"
+      - "ui/**"
+      - "tests/v2_*.rs"
+      - "tests/v2_support/**"
+      - "tests/fixtures/v2/**"
+      - "config/v2/**"
+      - "docs/v2/**"
+      - "Dockerfile.v2"
+      - "Dockerfile.v2.dockerignore"
+      - "compose.v2.yaml"
+      - ".env.v2.example"
+      - "scripts/v2-e2e.sh"
+      - ".github/workflows/lastest-v2.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Tests
+        run: cargo test --locked --all-targets --all-features
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Diff whitespace
+        run: git diff --check
+      - name: Compose configuration
+        env:
+          LASTEST_IMAGE: ghcr.io/example/lastest@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        run: docker compose -f compose.v2.yaml config -q
+
+  image-amd64:
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start temporary insecure registry for CI only
+        run: |
+          echo '{"insecure-registries":["localhost:5000"]}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          docker run -d --name lastest-e2e-registry -p 5000:5000 registry:2
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/v2/ >/dev/null; then break; fi
+            sleep 1
+          done
+      - name: Build image
+        run: docker build --pull -f Dockerfile.v2 -t localhost:5000/lastest:v2 .
+      - name: Publish to temporary registry
+        run: docker push localhost:5000/lastest:v2
+      - name: Resolve immutable digest
+        id: digest
+        run: |
+          IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/lastest:v2)"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Compose pull/up/ps
+        env:
+          LASTEST_IMAGE: ${{ steps.digest.outputs.image }}
+          LASTEST_PORT: "18080"
+          LASTEST_SECURE_COOKIES: "false"
+          LASTEST_INTERNAL_RANGES: "127.0.0.0/8"
+        run: |
+          docker compose -f compose.v2.yaml config -q
+          docker compose -f compose.v2.yaml pull
+          docker compose -f compose.v2.yaml up -d --no-build
+          docker compose -f compose.v2.yaml ps
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/v2/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/api/v2/health/ready
+          docker compose -f compose.v2.yaml down -v
+      - name: End-to-end image scenario
+        env:
+          LASTEST_IMAGE: ${{ steps.digest.outputs.image }}
+        run: ./scripts/v2-e2e.sh
+
+  image-arm64:
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build arm64 image (validation on arm64 host required before manifest)
+        run: |
+          docker buildx build --platform linux/arm64 \
+            -f Dockerfile.v2 -t lastest-v2:arm64-check .

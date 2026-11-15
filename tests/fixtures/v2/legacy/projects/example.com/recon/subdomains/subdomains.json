@@ -1,0 +1,8 @@
+{
+  "updated_at": "2024-01-03T10:00:00",
+  "sources": {
+    "subfinder": ["www.example.com", "api.example.com"],
+    "amass": ["api.example.com"]
+  },
+  "all": ["www.example.com", "api.example.com", "*.example.com"]
+}

@@ -10,6 +10,40 @@ LasTest - внутренняя платформа для автоматизац�
 
 Важно: платформа предназначена только для активов, на которые у команды есть письменное разрешение на проверку.
 
+## LasTest 2.0 (Rust, без Go)
+
+В репозитории параллельно с 1.x добавлен самостоятельный контур 2.0: один бинарник `lastest` с режимами `serve`, `worker` и CLI, SQLite с WAL и встроенный статический UI. Базовый образ не содержит Go, Python, Kali, `subfinder`, `httpx`, `nuclei`, `gau`, `ffuf` и других внешних сканеров. Исходный Python/CLI-контур 1.x сохранён для совместимости и отката.
+
+Установка из готового образа по digest:
+
+```bash
+cp .env.v2.example .env.v2
+# указать LASTEST_IMAGE=registry/name@sha256:... и при необходимости LASTEST_INTERNAL_RANGES
+docker compose --env-file .env.v2 -f compose.v2.yaml pull
+docker compose --env-file .env.v2 -f compose.v2.yaml up -d --no-build
+docker compose --env-file .env.v2 -f compose.v2.yaml ps
+```
+
+Первичный администратор создаётся только явной локальной командой из контейнера или хоста:
+
+```bash
+lastest --data-dir ./lastest-data admin bootstrap --username admin --password-stdin
+```
+
+Документация 2.0: [установка](docs/v2/install.md), [контракт API](docs/v2/api.md), [работа оператора](docs/v2/operator.md), [миграция](docs/v2/migration.md), [откат и backup](docs/v2/rollback.md), [проверки и замеры](docs/v2/checks.md).
+
+Проверки 2.0 выполняются из корня:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo build --locked --release
+./scripts/v2-e2e.sh   # требует LASTEST_IMAGE=<image>@sha256:<digest> и Docker
+```
+
+Старый контур 1.x ниже продолжает запускаться командами `python main.py`, `uvicorn app.main:app` и `python -m app.worker`.
+
 ## 3. Что умеет проект
 
 - Вести проекты и scope: домены, IP-адреса, исключения.

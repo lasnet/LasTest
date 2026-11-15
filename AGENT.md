@@ -1,4 +1,4 @@
-# AGENT.md
+# Памятка по разработке LasTest
 
 ## 1. Назначение проекта
 
@@ -17,11 +17,24 @@ LasTest Pentest Platform - внутренняя платформа автома�
 - `reports/`
 - `logs/`
 
-Web/API создаёт задачи в SQLite. Worker забирает queued-задачи, запускает заранее разрешённые инструменты и сохраняет результаты в директорию проекта.
+`POST /api/projects/{project_name}/jobs` проверяет проект и тип задачи, записывает её в SQLite и возвращает `202`. Worker забирает задачи из очереди, переводит их из `queued` в `running` и завершает со статусом `succeeded` или `failed`. Результаты сохраняются в директории проекта, а лог задачи доступен через `GET /api/jobs/{job_id}/log` и хранится в `LOGS_DIR/jobs/<job_id>.log`.
 
-Web UI работает как простая SPA без Node-сборки: левое меню остаётся постоянным, а правая рабочая область переключается по hash-routes. После login проект не выбирается автоматически; пользователь должен выбрать проект в workspace selector или создать новый.
+Web UI работает как статическая SPA без Node-сборки. Левое меню остаётся постоянным, а правая рабочая область переключается по hash-routes. После входа и при загрузке страницы выбранный проект пуст. Пользователь выбирает проект в workspace selector или создаёт новый, который сразу становится активным.
 
 Dashboard не должен считать mock-метрики для реального проекта. Для выбранного проекта он читает артефакты из `projects/<project>/recon/...` и `projects/<project>/web/...`, а также историю jobs из SQLite.
+
+### Артефакты задач
+
+Пути указаны относительно каталога проекта. При изменении формата проверь, как `app/services/tool_registry.py` и CLI-модули записывают эти файлы и как dashboard и последующие задачи их читают.
+
+| Тип задачи | Файл для dashboard | Ключи JSON |
+| --- | --- | --- |
+| `subfinder` | `recon/subdomains/subdomains.json` | `all` со списком поддоменов и `sources` с разбивкой по источникам |
+| `dns-records` | `recon/dns_records/dns_records.json` | `hosts` |
+| `httpx-root` | `recon/httpx/alive_hosts.json` | `hosts` |
+| `nuclei` | `web/nuclei/findings.json` | `findings` |
+
+Для HTTP-хостов dashboard сначала читает `alive_hosts.json`, затем использует резервные ключи `recon.httpx.root_alive_hosts` и `recon.alive_hosts` из `config.yaml`. Worker для `nuclei` сначала берёт цели из этих ключей, затем из `recon/httpx/alive_hosts.txt`, если явные `params.targets` не переданы.
 
 ## 3. Архитектура проекта
 
@@ -39,7 +52,7 @@ Dashboard не должен считать mock-метрики для реаль
 - Static web UI: `app/static/`; страницы переключаются через `data-view` / `data-view-link` в `app/static/index.html` и `state.activeView` в `app/static/app.js`.
 - Docker: `Dockerfile`, `docker-compose.yml`.
 
-Текущий web-перенос реализован как v1-обвязка, а не полная замена CLI. При добавлении новых web-возможностей сначала выносить бизнес-логику из интерактивных CLI-функций в сервисы.
+Web-слой покрывает часть сценариев CLI. При переносе сценария сначала выноси бизнес-логику из интерактивных функций в сервисы.
 
 ## 4. Структура директорий
 
@@ -88,7 +101,7 @@ logs/
 
 ## 6. Как запускать проект
 
-Docker:
+### Docker Compose
 
 ```bash
 cp .env.example .env
@@ -97,25 +110,28 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Без Docker:
+### Без Docker
+
+Запускай команды из корня репозитория. Web читает окружение процесса через `app/core/settings.py`. Само приложение не загружает `.env`, поэтому при локальном запуске передай переменные окружения каждому процессу. Для API и worker должны совпадать `PROJECTS_DIR`, `LOGS_DIR` и `DATABASE_URL`. Относительные web-пути разрешаются от корня репозитория. CLI использует `projects/` относительно текущего каталога.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 export AUTH_JWT_SECRET="local-jwt-secret"
 export AUTH_BOOTSTRAP_ADMIN_PASSWORD="very-long-local-admin-password"
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Worker:
+### Worker в отдельном терминале
 
 ```bash
+source .venv/bin/activate
 export AUTH_JWT_SECRET="local-jwt-secret"
 python -m app.worker
 ```
 
-CLI:
+### CLI
 
 ```bash
 python main.py
@@ -123,19 +139,15 @@ python main.py
 
 ## 7. Как запускать тесты
 
-Минимальные тесты без внешних pentest-инструментов:
+Установи зависимости из `requirements.txt`. Тесты используют временные директории и фикстуры. Внешние pentest-инструменты, Docker и запущенный API для них не нужны.
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Если установлен `pytest`:
+При установленном `pytest` можно использовать `python -m pytest`. Набор тестов покрывает валидацию, хранилище очереди, хранилище авторизации и агрегацию dashboard.
 
-```bash
-pytest
-```
-
-Перед завершением изменений запускать хотя бы `python -m unittest discover -s tests` и `python -m compileall app core modules main.py tests`.
+После изменений Python запусти тесты и `python -m compileall -q app core modules main.py tests`. Для изолированной ручной проверки API укажи временные `PROJECTS_DIR`, `DATA_DIR`, `LOGS_DIR` и `DATABASE_URL` до импорта `app.main`, поскольку он сразу создаёт каталоги и инициализирует SQLite. Формат URL для абсолютного пути к SQLite — `sqlite:////tmp/lastest-check/lastest.sqlite3`.
 
 ## 8. Как добавлять новые функции
 
@@ -148,7 +160,7 @@ pytest
 5. Сохранять артефакты в директорию проекта.
 6. Если результат влияет на dashboard, добавить чтение артефакта в `app/services/dashboard.py`.
 7. Добавить тесты на валидацию/очередь/нормализацию/dashboard aggregation.
-8. Обновить `README.md`, `AGENT.md`, `.env.example`, если появились новые команды, зависимости или переменные.
+8. Обновить соответствующую документацию и `.env.example`, если появились новые команды, зависимости или переменные окружения.
 
 Для CLI-модуля:
 
@@ -196,28 +208,22 @@ pytest
 - команды проверки;
 - пользовательский workflow.
 
-Обновлять `AGENT.md`, если меняется:
-
-- архитектура;
-- структура директорий;
-- бизнес-логика;
-- правила добавления модулей;
-- статус проекта;
-- roadmap.
+Обновляй `AGENT.md` при изменениях архитектуры, форматов данных, правил добавления модулей, статуса проекта или roadmap. `AGENTS.md` служит входной точкой для агента и ссылается на подробную памятку.
 
 ## 13. Частые ошибки и важные нюансы
 
 - Старые CLI-функции часто используют `Prompt.ask` и `input()`. Их нельзя напрямую вызывать из web worker.
 - Web API должен работать только с разрешёнными task types из registry.
-- API использует Bearer JWT, а не постоянный API key. Старый `WEB_API_KEY` оставлен только как legacy fallback для JWT secret.
-- Роли: `viewer` читает, `analyst` создаёт проекты/scope/jobs, `admin` управляет users/audit.
+- Для запросов к защищённым маршрутам API передавай JWT в заголовке `Authorization: Bearer <token>`.
+- Роли действуют на уровне всего приложения. `viewer` может читать проекты, задачи и их логи, `analyst` также создаёт проекты и задачи и меняет scope, `admin` также управляет пользователями и читает аудит.
 - Первый admin создаётся из `AUTH_BOOTSTRAP_ADMIN_USERNAME` и `AUTH_BOOTSTRAP_ADMIN_PASSWORD`, только если таблица users пустая. Пароль должен быть минимум 12 символов; короткий пароль не должен ломать startup, но admin не будет создан.
 - JWT-сессии хранят `jti` в SQLite `auth_sessions`; logout отзывает текущую сессию.
 - Audit log хранится в SQLite `audit_events`; логировать login/logout, управление пользователями и mutating project/job actions.
 - Реальные dashboard-метрики берутся через `GET /api/projects/{project_name}/dashboard`.
-- `scope.domains` - ручной разрешённый scope. Не записывать туда найденные поддомены; для recon-результатов использовать `recon/subdomains/subdomains.json`.
+- В новом web-коде держи ручной scope отдельно от результатов recon. Старый CLI в `modules/recon/storage.py` добавляет результаты через `save_subdomains()` в `scope.domains`, а через `save_scope_ips()` в `scope.ips`. Данные старых проектов могут содержать найденные цели в этих полях.
+- Web сохраняет `scope.exclusions` в `config.yaml`. Текущие обработчики задач это поле не проверяют. `subfinder` принимает явные `params.domains`, а `httpx-root` и `nuclei` принимают явные `params.targets` без сверки с ручным scope. При работе над проверкой scope учитывай как явные цели, так и цели из старых артефактов.
 - `dns-records` использует `dnspython`, не требует системного binary и пишет `recon/dns_records/dns_records.json`.
-- `AUTH_JWT_SECRET` обязателен, если `WEB_AUTH_DISABLED=false`. `WEB_AUTH_DISABLED=true` допустим только для локального стенда.
+- При включённой авторизации задай `AUTH_JWT_SECRET`. Без него приложение пробует `WEB_API_KEY` как резервный секрет для подписи JWT. Если оба пустые, `/api/health` сообщает `auth_configured: false`. `WEB_AUTH_DISABLED=true` допустим только для локального стенда.
 - UI не должен автоподставлять первый проект после login. Нельзя запускать jobs или сохранять scope, пока `state.selectedProject` пустой.
 - Dashboard без выбранного проекта должен показывать только состояние выбора проекта, а не mock-метрики.
 - Новые UI-разделы добавлять как отдельные `data-view` секции; не превращать Dashboard в страницу “всё сразу”.
@@ -251,8 +257,8 @@ pytest
 
 - Web покрывает первые задачи: `subfinder`, `dns-records`, `httpx-root`, `nuclei`.
 - Большая часть старых CLI-модулей ещё не вынесена в неинтерактивные сервисы.
-- Управление пользователями в UI пока минимальное: create/list/audit.
-- Нет отмены задач.
+- В Admin UI доступны создание и список пользователей и просмотр аудита. Смена роли, пароля и активности уже доступны через `PATCH /api/auth/users/{username}`.
+- В UI Reports показывает заглушку, а Automation запускает четыре зарегистрированные задачи вручную. Планировщика и отмены задач пока нет.
 
 ## 15. TODO / Roadmap
 

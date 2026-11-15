@@ -1,0 +1,8 @@
+{
+  "targets": [
+    {"target": "www.example.com", "ip": "203.0.113.10", "ports": [
+      {"port": 443, "state": "open", "service": {"name": "https", "product": "nginx", "version": "1.24.0"}},
+      {"port": 8080, "state": "timeout"}
+    ]}
+  ]
+}
