@@ -1,7 +1,0 @@
-apis:
-  censys:
-    # Do not store real secrets here. Prefer CENSYS_PERSONAL_ACCESS_TOKEN in .env.
-    personal_access_token: ""
-
-  shodan:
-    use_internetdb: true

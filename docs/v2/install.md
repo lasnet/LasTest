@@ -1,39 +1,37 @@
 # Установка LasTest 2.0
 
-Контур 2.0 поставляется одним OCI-образом. API и worker запускаются двумя непривилегированными процессами из одного digest и используют общий локальный том `/data`.
+LasTest 2.0 использует один OCI-образ для API и worker. Оба процесса работают от непривилегированного пользователя и используют общий том `lastest-v2-data`, смонтированный в `/data`.
 
-## 1. Получить digest
+## 1. Скачать образ из GHCR
 
-Тег образа изменяем. Для установки нужен digest из CI или реестра:
+После проверки ветки `dev` GitHub Actions публикует образ для Linux `amd64`. Тег `dev` указывает на последнюю проверенную сборку, а тег `sha-<полный SHA коммита>` позволяет найти конкретную сборку. В итогах запуска Actions указан её digest.
+
+Для приватного пакета войдите в GHCR под GitHub-аккаунтом с доступом к пакету. При запросе пароля введите GitHub PAT classic с правом `read:packages`. Токен хранится в настройках клиента Docker и не входит в `.env.v2`. [Вход в GHCR](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)
 
 ```bash
-docker buildx imagetools inspect ghcr.io/OWNER/lastest:2.0.0 --format '{{json .Manifest.Digest}}'
-# или после pull:
-docker image inspect ghcr.io/OWNER/lastest:2.0.0 --format '{{index .RepoDigests 0}}'
+docker login ghcr.io
+docker pull ghcr.io/lasnet/lastest:dev
+docker image inspect ghcr.io/lasnet/lastest:dev --format '{{index .RepoDigests 0}}'
 ```
 
-Результат должен иметь вид `ghcr.io/OWNER/lastest@sha256:...`.
+Скопируйте строку вида `ghcr.io/lasnet/lastest@sha256:...` для Compose. Если digest уже есть из CI, достаточно входа в GHCR и шага 2.
 
 ## 2. Подготовить Compose
 
-```bash
-cp .env.v2.example .env.v2
-# LASTEST_IMAGE=ghcr.io/OWNER/lastest@sha256:...
-# LASTEST_SECURE_COOKIES=true (TLS через reverse proxy)
-# LASTEST_INTERNAL_RANGES= только для явно разрешённых внутренних стендов
-docker compose --env-file .env.v2 -f compose.v2.yaml config -q
-```
+При первой установке создайте `.env.v2` командой `cp .env.v2.example .env.v2`. Укажите полученный digest в `LASTEST_IMAGE`. Со стандартными настройками API доступен на `127.0.0.1:8080`. Для HTTP на loopback либо в доверенной локальной сети выставьте `LASTEST_SECURE_COOKIES=false`. Для HTTPS через reverse proxy оставьте `true`. Внутренние диапазоны для сканирования задаются отдельно в `LASTEST_INTERNAL_RANGES`.
 
-`compose.v2.yaml` не содержит `build:`, плавающих тегов и ссылок на исходники хоста. API публикуется только на `127.0.0.1`. Том `lastest-v2-data` хранит SQLite и доказательства.
+```bash
+docker compose --env-file .env.v2 -f compose.v2.yaml config -q
+docker compose --env-file .env.v2 -f compose.v2.yaml pull
+```
 
 ## 3. Первый администратор
 
-Пароль передаётся только через stdin или защищённый файл (`chmod 600`). Пароль короче 12 символов отклоняется.
+При чистой установке создайте первого администратора. Команда попросит ввести пароль в терминале. Минимум 12 символов. При обновлении существующей установки переходите к следующему шагу.
 
 ```bash
-docker run --rm -i -v lastest-v2-data:/data \
-  ghcr.io/OWNER/lastest@sha256:... \
-  admin bootstrap --username admin --password-stdin
+docker compose --env-file .env.v2 -f compose.v2.yaml run --rm -i --no-deps --pull never \
+  api admin bootstrap --username admin
 ```
 
 Для локального запуска без Compose:
@@ -45,11 +43,14 @@ lastest --data-dir ./lastest-data admin bootstrap --username admin --password-st
 ## 4. Запуск и диагностика
 
 ```bash
-docker compose --env-file .env.v2 -f compose.v2.yaml pull
-docker compose --env-file .env.v2 -f compose.v2.yaml up -d --no-build
+docker compose --env-file .env.v2 -f compose.v2.yaml up -d --no-build --pull never
 docker compose --env-file .env.v2 -f compose.v2.yaml ps
 curl -fsS http://127.0.0.1:8080/api/v2/health/ready
 ```
+
+Для обновления с локального образа `lastest-v2:local` или предыдущего digest замените только `LASTEST_IMAGE` в действующем `.env.v2`. Выполните `pull` из шага 2 и `up` выше. Compose использует существующий том с регистрацией пользователей, проектами и результатами.
+
+Если порт опубликован на конкретном IP сервера, используйте этот IP для проверки `/api/v2/health/ready`.
 
 Перед запуском проверьте конфигурацию и том:
 
@@ -106,11 +107,19 @@ install -d -m 0750 -o 10001 -g 10001 /srv/lastest-data
 Минимальный сценарий:
 
 1. Установить Docker/Compose.
-2. Получить digest.
-3. `pull` и `up -d --no-build`.
-4. Создать администратора.
+2. Войти в GHCR и указать digest в `.env.v2`.
+3. Выполнить `pull` и создать администратора.
+4. Выполнить `up -d --no-build --pull never`.
 5. Выполнить одну задачу на локальном стенде.
 6. Перезапустить оба контейнера и убедиться, что история и отчёт сохранились.
 7. Проверить отсутствие компиляторов и скачивания шаблонов при первом старте.
 
 Автоматический вариант — `./scripts/v2-e2e.sh` с `LASTEST_IMAGE` по digest. Скрипт создаёт собственную сеть, том и контейнеры и удаляет только их.
+
+## 9. Локальная сборка для разработки
+
+```bash
+docker build -f Dockerfile.v2 -t lastest-v2:local .
+```
+
+Для этого режима задайте `LASTEST_IMAGE=lastest-v2:local` и запускайте Compose с `--pull never`.

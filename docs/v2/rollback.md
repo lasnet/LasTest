@@ -25,16 +25,16 @@ docker volume create lastest-restore-data
 docker run --rm \
   -v lastest-restore-data:/data \
   -v /backup/lastest-2026-11-15:/backup:ro \
-  ghcr.io/OWNER/lastest@sha256:... \
-  lastest --data-dir /data restore --from /backup --force
+  ghcr.io/lasnet/lastest@sha256:... \
+  --data-dir /data restore --from /backup --force
 ```
 
 Перед переключением проверьте:
 
 ```bash
 docker run --rm -v lastest-restore-data:/data \
-  ghcr.io/OWNER/lastest@sha256:... \
-  lastest --data-dir /data doctor
+  ghcr.io/lasnet/lastest@sha256:... \
+  --data-dir /data doctor
 ```
 
 `doctor` должен показать `compatible=true`, доступный на запись том и корректный `schema_version`. Только после этого переключайте Compose на новый том.
@@ -45,8 +45,8 @@ docker run --rm -v lastest-restore-data:/data \
 
 1. Сохраните новый том 2.0 целиком (или сделайте `lastest backup`).
 2. Сохраните digest текущего образа 2.0.
-3. Оставьте старую копию 1.x, её `projects/`, `data/`, `logs/` и SQLite отдельно; не переносите их обратно поверх 2.0.
-4. Переключите Compose/CLI на старую копию.
+3. Используйте отдельную копию исходников из тега [`v1-legacy`](https://github.com/lasnet/LasTest/tree/v1-legacy) и отдельные `projects/`, `data/`, `logs/` и SQLite 1.x.
+4. Запустите Compose или CLI из этой копии.
 5. Не удаляйте том 2.0: после отката новые результаты 1.x в него не попадут.
 
 Перед повторным включением 2.0:

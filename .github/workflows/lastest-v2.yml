@@ -3,6 +3,7 @@ name: LasTest 2.0
 on:
   push:
     paths:
+      - ".dockerignore"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -15,7 +16,6 @@ on:
       - "config/v2/**"
       - "docs/v2/**"
       - "Dockerfile.v2"
-      - "Dockerfile.v2.dockerignore"
       - "compose.v2.yaml"
       - ".env.v2.example"
       - "scripts/v2-e2e.sh"
@@ -26,11 +26,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: "1.100.0"
@@ -53,8 +57,13 @@ jobs:
   image-amd64:
     runs-on: ubuntu-24.04
     needs: test
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      published_image: ${{ steps.publish.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Start temporary insecure registry for CI only
         run: |
           echo '{"insecure-registries":["localhost:5000"]}' | sudo tee /etc/docker/daemon.json >/dev/null
@@ -65,7 +74,11 @@ jobs:
             sleep 1
           done
       - name: Build image
-        run: docker build --pull -f Dockerfile.v2 -t localhost:5000/lastest:v2 .
+        run: |
+          docker build --pull -f Dockerfile.v2 \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t localhost:5000/lastest:v2 .
       - name: Publish to temporary registry
         run: docker push localhost:5000/lastest:v2
       - name: Resolve immutable digest
@@ -95,11 +108,62 @@ jobs:
           LASTEST_IMAGE: ${{ steps.digest.outputs.image }}
         run: ./scripts/v2-e2e.sh
 
+      - name: Publish the tested dev image to GHCR
+        id: publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev' && github.repository == 'lasnet/LasTest'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image=ghcr.io/lasnet/lastest
+          revision_tag="$image:sha-$GITHUB_SHA"
+          printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker tag localhost:5000/lastest:v2 "$revision_tag"
+          docker tag localhost:5000/lastest:v2 "$image:dev"
+          docker push "$revision_tag"
+          docker push "$image:dev"
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$revision_tag" | awk -v prefix="$image@" 'index($0, prefix)==1 {print; exit}')"
+          [[ "$digest" == "$image"@sha256:* ]]
+          printf 'image=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'LasTest dev image for Linux amd64\n\n%s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+  install-dev-amd64:
+    runs-on: ubuntu-24.04
+    needs: image-amd64
+    if: needs.image-amd64.outputs.published_image != ''
+    permissions:
+      contents: read
+      packages: read
+    env:
+      LASTEST_IMAGE: ${{ needs.image-amd64.outputs.published_image }}
+      LASTEST_PORT: "18080"
+      LASTEST_SECURE_COOKIES: "false"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Sign in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Pull and start the published image on a fresh runner
+        run: |
+          docker compose -f compose.v2.yaml pull
+          docker compose -f compose.v2.yaml up -d --no-build --pull never
+          docker compose -f compose.v2.yaml ps
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/v2/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/api/v2/health/ready
+      - name: Run the installation smoke test
+        run: ./scripts/v2-e2e.sh
+      - name: Remove CI services and data
+        if: always()
+        run: docker compose -f compose.v2.yaml down -v
+
   image-arm64:
     runs-on: ubuntu-24.04
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build arm64 image (validation on arm64 host required before manifest)

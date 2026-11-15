@@ -1,2 +1,0 @@
-"""Core web application utilities."""
-

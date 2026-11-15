@@ -16,7 +16,6 @@
 | `docker compose -f compose.v2.yaml up -d --no-build` | API/worker без сборки |
 | `docker compose -f compose.v2.yaml ps` | оба сервиса запущены |
 | `git diff --check` | нет whitespace errors |
-| `python -m unittest discover -s tests` | старые Python-тесты 1.x (зависимости из `requirements.txt`) |
 
 `LASTEST_IMAGE` должен содержать `@sha256:`. Compose-команды используют тестовую конфигурацию и локальный порт; `scripts/v2-e2e.sh` создаёт собственную сеть/том и удаляет только их.
 
@@ -37,7 +36,7 @@
 
 Среда: macOS Darwin x86_64, Intel Core i7-9750H (2.60 GHz), 16 GiB RAM, Rust 1.100.0, release build, локальный стенд `127.0.0.1`, один worker, `max_concurrent_jobs=1`.
 
-Выполнено в текущей среде: `cargo fmt --check`, `cargo clippy ... -D warnings`, `cargo test --locked --all-targets --all-features`, `cargo build --locked --release`, `docker compose -f compose.v2.yaml config -q`, `git diff --check`, `python -m unittest discover -s tests` (12/12 OK после установки Python-зависимостей в отдельный venv).
+На этапе перехода прошли `cargo fmt --check`, `cargo clippy ... -D warnings`, `cargo test --locked --all-targets --all-features`, `cargo build --locked --release`, проверка конфигурации Compose и `git diff --check`.
 
 | Показатель | Значение | Условия |
 | --- | --- | --- |

@@ -1,9 +1,0 @@
-rich
-prompt_toolkit
-PyYAML
-jinja2
-requests
-python-nmap
-dnspython
-fastapi
-uvicorn[standard]
