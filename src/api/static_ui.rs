@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 const INDEX: &str = include_str!("../../ui/index.html");
 const APP_JS: &str = include_str!("../../ui/app.js");
+const THEME_JS: &str = include_str!("../../ui/theme.js");
 const STYLES: &str = include_str!("../../ui/styles.css");
+const INSTRUMENT_SANS: &[u8] = include_bytes!("../../ui/fonts/instrument-sans.woff2");
+const FONT_LICENSE: &str = include_str!("../../ui/fonts/OFL.txt");
 
 fn security_headers(response: &mut Response) {
     let headers = response.headers_mut();
@@ -32,12 +35,20 @@ pub async fn index() -> Response {
 }
 
 pub async fn app_js() -> Response {
+    javascript(APP_JS)
+}
+
+pub async fn theme_js() -> Response {
+    javascript(THEME_JS)
+}
+
+fn javascript(script: &'static str) -> Response {
     let mut response = (
         [(
             header::CONTENT_TYPE,
             "application/javascript; charset=utf-8",
         )],
-        APP_JS,
+        script,
     )
         .into_response();
     security_headers(&mut response);
@@ -47,6 +58,18 @@ pub async fn app_js() -> Response {
 pub async fn styles() -> Response {
     let mut response =
         ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLES).into_response();
+    security_headers(&mut response);
+    response
+}
+
+pub async fn instrument_sans() -> Response {
+    let mut response = ([(header::CONTENT_TYPE, "font/woff2")], INSTRUMENT_SANS).into_response();
+    security_headers(&mut response);
+    response
+}
+
+pub async fn font_license() -> Response {
+    let mut response = FONT_LICENSE.into_response();
     security_headers(&mut response);
     response
 }

@@ -19,6 +19,13 @@
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+  const dateLabel = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
+  const timeLabel = new Intl.DateTimeFormat("en-GB", { timeStyle: "medium", timeZone: "UTC" });
+  const countLabel = new Intl.NumberFormat("en");
+  const dateColumns = new Set(["Time", "Finished", "Observed", "First seen", "Last seen", "Created", "Approved"]);
+  const numberColumns = new Set(["HTTP status", "Port", "Evaluated", "Findings", "Not applicable"]);
+  const wrapColumns = new Set(["URL", "Value", "Reason", "Title", "Asset", "Entity"]);
+  const severityStyles = { critical: "bad", high: "bad", medium: "warn" };
 
   function el(tag, text, className) {
     const node = document.createElement(tag);
@@ -51,24 +58,66 @@
     node.textContent = message;
   }
 
+  function displayTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return el("span", value);
+    const time = el("time", dateLabel.format(date), "table-time");
+    time.dateTime = value;
+    time.title = value;
+    time.appendChild(el("span", `${timeLabel.format(date)} UTC`));
+    return time;
+  }
+
   function table(columns, rows, cellValue) {
     if (!rows || rows.length === 0) {
       return el("p", "No data for this view.", "empty");
     }
     const wrapper = el("div", null, "table-wrap");
+    const compactRows = columns.length > 3;
+    if (compactRows) wrapper.classList.add("table-wide");
     const tbl = el("table");
     const thead = el("thead");
     const headerRow = el("tr");
-    for (const column of columns) headerRow.appendChild(el("th", column));
+    for (const column of columns) {
+      const heading = el("th", column, numberColumns.has(column) ? "table-number" : "");
+      heading.scope = "col";
+      headerRow.appendChild(heading);
+    }
     thead.appendChild(headerRow);
     const tbody = el("tbody");
+    if (compactRows) {
+      tbl.setAttribute("role", "table");
+      thead.setAttribute("role", "rowgroup");
+      tbody.setAttribute("role", "rowgroup");
+      headerRow.setAttribute("role", "row");
+      for (const heading of headerRow.children) heading.setAttribute("role", "columnheader");
+    }
     for (const row of rows) {
       const tr = el("tr");
+      if (compactRows) tr.setAttribute("role", "row");
       for (const column of columns) {
         const td = el("td");
+        if (numberColumns.has(column)) td.classList.add("table-number");
+        if (wrapColumns.has(column)) td.classList.add("table-wrap-text");
+        if (compactRows) {
+          td.setAttribute("role", "cell");
+          td.dataset.label = column;
+          if (column) {
+            const label = el("span", column, "compact-cell-label");
+            label.setAttribute("aria-hidden", "true");
+            td.appendChild(label);
+          }
+        }
         const value = cellValue ? cellValue(row, column) : row[column];
         if (value instanceof Node) td.appendChild(value);
-        else td.textContent = value === null || value === undefined ? "" : String(value);
+        else if (value && dateColumns.has(column)) td.appendChild(displayTime(value));
+        else if (value && column === "Severity") {
+          td.appendChild(el("span", value, `badge ${severityStyles[value] || ""}`));
+        } else if (value && column === "Status" && statusClass(value)) {
+          td.appendChild(el("span", value, `badge ${statusClass(value)}`));
+        } else {
+          td.append(value === null || value === undefined || value === "" ? "—" : String(value));
+        }
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -127,7 +176,10 @@
   function showApp() {
     $("#login-view").hidden = true;
     $("#app-view").hidden = false;
-    $("#current-user").textContent = `${state.me.username} · ${state.me.role}`;
+    $("#current-user").replaceChildren(
+      el("span", state.me.username),
+      el("span", state.me.role, "account-role"),
+    );
     const admin = state.me.role === "admin";
     $$("[data-admin-only]").forEach((node) => { node.hidden = !admin; });
     const analyst = admin || state.me.role === "analyst";
@@ -307,8 +359,8 @@
       status.appendChild(el("p", "Loading scope…", "muted"));
     } else {
       const approved = state.scope.status === "approved";
-      status.appendChild(el("h3", `Revision ${state.scope.version}`));
-      const line = el("p");
+      status.appendChild(el("h2", `Revision ${state.scope.version}`));
+      const line = el("p", null, "scope-meta");
       append(line,
         el("span", `Status: ${state.scope.status}`, approved ? "badge ok" : "badge warn"),
         el("span", ` Rules: ${state.rules.length}`, "badge"),
@@ -382,7 +434,11 @@
         el("span", job.status, `badge ${statusClass(job.status)}`));
       card.appendChild(head);
       const counters = job.counters || {};
-      card.appendChild(el("p", `Targets ${counters.targets || 0} · processed ${counters.processed || 0} · skipped ${counters.skipped || 0} · errors ${counters.errors || 0}`, "muted"));
+      const details = el("dl", null, "job-counters");
+      for (const [label, count] of [["Targets", counters.targets], ["Processed", counters.processed], ["Skipped", counters.skipped], ["Errors", counters.errors]]) {
+        details.appendChild(append(el("div"), el("dt", label), el("dd", countLabel.format(count || 0))));
+      }
+      card.appendChild(details);
       if (job.error) card.appendChild(el("p", job.error, "error"));
       if (job.archived) card.appendChild(el("p", "Archived imported record; it is never executed.", "muted"));
       if (job.chain) card.appendChild(el("p", `Chain ${job.chain.name}: ${job.chain.status} · stage ${job.chain_order}`, "muted"));
@@ -425,7 +481,7 @@
     const content = $("#dashboard-content");
     if (!state.projectId) {
       empty.hidden = false;
-      empty.textContent = "Select a project to load dashboard data. No project is selected by default.";
+      empty.replaceChildren(el("h2", "Choose a project"), el("p", "Select a project above to see its jobs, assets and findings."));
       content.hidden = true;
       return;
     }
@@ -437,7 +493,7 @@
     }
     empty.hidden = state.dashboard.data_status !== "empty";
     if (state.dashboard.data_status === "empty") {
-      empty.textContent = "No observations yet. Approve scope and run a job to populate the dashboard.";
+      empty.replaceChildren(el("h2", "No observations yet"), el("p", "Approve the project scope and run a scan to see results here."));
       content.hidden = true;
       return;
     }
@@ -445,10 +501,18 @@
     const metrics = $("#dashboard-metrics");
     clear(metrics);
     const data = state.dashboard.metrics;
-    for (const [label, key] of [["Hosts", "hosts"], ["IPs", "ips"], ["URLs", "urls"], ["Open ports", "open_ports"], ["Findings", "findings"], ["Jobs", "jobs"]]) {
-      const card = el("div", null, "metric");
-      append(card, el("span", data[key] ?? 0, "metric-value"), el("span", label, "muted"));
-      metrics.appendChild(card);
+    for (const group of [
+      [["Hosts", "hosts"], ["IP addresses", "ips"]],
+      [["URLs", "urls"], ["Open ports", "open_ports"]],
+      [["Findings", "findings"], ["Jobs", "jobs"]],
+    ]) {
+      const pair = el("div", null, "metric-pair");
+      for (const [label, key] of group) {
+        pair.appendChild(append(el("div", null, "metric"),
+          el("span", label, "metric-label"),
+          el("span", countLabel.format(data[key] ?? 0), "metric-value")));
+      }
+      metrics.appendChild(pair);
     }
     if (state.dashboard.data_status === "partial") {
       metrics.appendChild(el("p", "Some jobs completed partially. Review source errors below.", "warn-text"));
@@ -465,25 +529,26 @@
     const availability = $("#dashboard-availability");
     clear(availability);
     const worker = state.dashboard.worker || { state: "unknown" };
-    availability.appendChild(el(
-      "p",
-      `Worker: ${worker.state}${worker.last_heartbeat ? ` · last heartbeat ${worker.last_heartbeat}` : ""}`,
-      worker.state === "ready" ? "badge ok" : "badge warn",
-    ));
+    $("#dashboard-worker").replaceChildren(
+      el("span", `Worker: ${worker.state}`, worker.state === "ready" ? "badge ok" : "badge warn"),
+    );
+    if (worker.last_heartbeat) {
+      availability.appendChild(el("p", `Last heartbeat ${worker.last_heartbeat}`, "worker-heartbeat muted"));
+    }
     const unavailable = state.dashboard.availability?.unavailable || [];
     const errors = state.dashboard.availability?.recent_source_errors || {};
     if (!unavailable.length && !Object.keys(errors).length) {
       availability.appendChild(el("p", "All configured task types and sources are available.", "muted"));
     } else {
-      const items = unavailable.map((item) => `${item.task_type}: ${item.reason}`);
-      for (const [task, reason] of Object.entries(errors)) items.push(`${task}: ${reason}`);
-      availability.appendChild(table(["Availability"], items.map((value) => ({ value }))));
+      const items = unavailable.map((item) => ({ "Source": item.task_type, "Reason": item.reason }));
+      for (const [task, reason] of Object.entries(errors)) items.push({ "Source": task, "Reason": reason });
+      availability.appendChild(table(["Source", "Reason"], items));
     }
 
     const http = $("#dashboard-http");
     clear(http);
-    http.appendChild(table(["URL", "Status", "Source", "Observed"], state.dashboard.recent_http || [], (row, column) => {
-      if (column === "Status") return row.data?.status_code ?? "";
+    http.appendChild(table(["URL", "HTTP status", "Source", "Observed"], state.dashboard.recent_http || [], (row, column) => {
+      if (column === "HTTP status") return row.data?.status_code ?? "";
       if (column === "Source") return row.source;
       if (column === "Observed") return row.observed_at;
       return row.url;
@@ -533,7 +598,7 @@
     const counts = state.dashboard?.severity_counts || {};
     for (const severity of ["critical", "high", "medium", "low", "info", "unknown"]) {
       const card = el("div", null, "metric");
-      append(card, el("span", counts[severity] || 0, "metric-value"), el("span", severity, "muted"));
+      append(card, el("span", severity, "metric-label"), el("span", countLabel.format(counts[severity] || 0), "metric-value"));
       summary.appendChild(card);
     }
     const node = $("#findings-table");
@@ -668,7 +733,25 @@
     }
   });
 
+  const menuButton = $("#menu-button");
+  menuButton.addEventListener("click", () => {
+    menuButton.setAttribute("aria-expanded", String(menuButton.getAttribute("aria-expanded") !== "true"));
+  });
+  $("#sidebar-menu").addEventListener("click", (event) => {
+    if (event.target.closest("[data-view-link]") && menuButton.getAttribute("aria-expanded") === "true") {
+      menuButton.focus();
+      menuButton.setAttribute("aria-expanded", "false");
+    }
+  });
+  $(".sidebar").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && menuButton.getAttribute("aria-expanded") === "true") {
+      menuButton.focus();
+      menuButton.setAttribute("aria-expanded", "false");
+    }
+  });
+
   $("#logout-button").addEventListener("click", async () => {
+    menuButton.setAttribute("aria-expanded", "false");
     try { await api("/api/auth/logout", { method: "POST", body: {} }); } catch (_) {}
     state.me = null;
     state.projectId = "";

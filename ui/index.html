@@ -4,19 +4,52 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LasTest</title>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-mark" viewBox="0 0 24 24">
+      <path d="M4 9V5a1 1 0 0 1 1-1h4m6 0h4a1 1 0 0 1 1 1v4m0 6v4a1 1 0 0 1-1 1h-4M4 15v4a1 1 0 0 0 1 1h4m1-12v6h6"/>
+    </symbol>
+    <symbol id="icon-dashboard" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/>
+      <rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/>
+    </symbol>
+    <symbol id="icon-scope" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></symbol>
+    <symbol id="icon-scans" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3m8 0h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3m1-4h4l2-4 3 8 2-4h5"/></symbol>
+    <symbol id="icon-assets" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+    <symbol id="icon-findings" viewBox="0 0 24 24"><path d="M12 22s7-3 7-8V6l-7-3-7 3v8c0 5 7 8 7 8Zm0-13v4m0 3h.01"/></symbol>
+    <symbol id="icon-reports" viewBox="0 0 24 24"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6M9 13h6m-6 4h6"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2m1-15a3 3 0 0 1 0 6m2 3a4 4 0 0 1 3 4v2"/></symbol>
+    <symbol id="icon-account" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5 20v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/></symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4m5-12 4 4-4 4m-6-4h10"/></symbol>
+    <symbol id="icon-project" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-5L3 9m0-5v5h5m-4 4a8 8 0 0 0 14 5l3-3m0 5v-5h-5"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4m-12 5v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+  </svg>
+
   <div id="login-view" class="login-shell">
     <main class="login-card" aria-labelledby="login-title">
-      <h1 id="login-title">LasTest</h1>
-      <p class="muted">Authorized local security assessment. Use only on explicitly approved targets.</p>
+      <div class="brand">
+        <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg></span>
+        <h1 id="login-title">LasTest</h1>
+      </div>
+      <p class="muted login-intro">Local security assessment for explicitly approved targets.</p>
       <p id="login-status" role="status" hidden></p>
       <form id="login-form">
-        <label for="login-username">Username</label>
-        <input id="login-username" name="username" autocomplete="username" required>
-        <label for="login-password">Password</label>
-        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <h2>Sign in</h2>
+        <div class="field">
+          <label for="login-username">Username</label>
+          <input id="login-username" name="username" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        </div>
         <button type="submit" class="primary">Sign in</button>
         <p id="login-error" class="error" role="alert"></p>
       </form>
@@ -24,13 +57,19 @@
         <h2 id="setup-title">Create the first administrator</h2>
         <p class="muted">Run this command on the server and paste the one-time code. It expires after 15 minutes.</p>
         <pre><code>docker compose exec api lastest admin setup-code</code></pre>
-        <label for="setup-code">Setup code</label>
-        <input id="setup-code" type="password" autocomplete="off" spellcheck="false" required>
-        <label for="setup-username">Username</label>
-        <input id="setup-username" value="admin" autocomplete="username" required>
-        <label for="setup-password">Password</label>
-        <input id="setup-password" type="password" autocomplete="new-password" required aria-describedby="setup-password-hint">
-        <p id="setup-password-hint" class="muted">Use at least 12 characters.</p>
+        <div class="field">
+          <label for="setup-code">Setup code</label>
+          <input id="setup-code" type="password" autocomplete="off" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="setup-username">Username</label>
+          <input id="setup-username" value="admin" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="setup-password">Password</label>
+          <input id="setup-password" type="password" autocomplete="new-password" required aria-describedby="setup-password-hint">
+          <p id="setup-password-hint" class="muted field-hint">Use at least 12 characters.</p>
+        </div>
         <button type="submit" class="primary">Create administrator</button>
         <p id="setup-error" class="error" role="alert"></p>
       </form>
@@ -39,36 +78,61 @@
 
   <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="brand">LasTest</div>
-      <nav aria-label="Main navigation">
-        <a href="#dashboard" data-view-link="dashboard">Dashboard</a>
-        <a href="#scope" data-view-link="scope">Scope</a>
-        <a href="#scans" data-view-link="scans">Scans</a>
-        <a href="#assets" data-view-link="assets">Assets</a>
-        <a href="#findings" data-view-link="findings">Findings</a>
-        <a href="#reports" data-view-link="reports">Reports</a>
-        <a href="#users" data-view-link="users" data-admin-only hidden>Users</a>
-      </nav>
-      <div class="sidebar-footer">
-        <span id="current-user" class="muted"></span>
-        <button id="logout-button" class="link">Log out</button>
+      <div class="sidebar-header">
+        <div class="brand">
+          <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg></span>
+          <span>LasTest</span>
+        </div>
+        <button id="menu-button" class="secondary menu-button" type="button" aria-controls="sidebar-menu" aria-expanded="false">
+          <svg class="icon" aria-hidden="true"><use href="#icon-menu"/></svg> Menu
+        </button>
+      </div>
+      <div id="sidebar-menu" class="sidebar-menu">
+        <nav aria-label="Main navigation">
+          <a href="#dashboard" data-view-link="dashboard"><svg class="icon" aria-hidden="true"><use href="#icon-dashboard"/></svg>Dashboard</a>
+          <a href="#scope" data-view-link="scope"><svg class="icon" aria-hidden="true"><use href="#icon-scope"/></svg>Scope</a>
+          <a href="#scans" data-view-link="scans"><svg class="icon" aria-hidden="true"><use href="#icon-scans"/></svg>Scans</a>
+          <a href="#assets" data-view-link="assets"><svg class="icon" aria-hidden="true"><use href="#icon-assets"/></svg>Assets</a>
+          <a href="#findings" data-view-link="findings"><svg class="icon" aria-hidden="true"><use href="#icon-findings"/></svg>Findings</a>
+          <a href="#reports" data-view-link="reports"><svg class="icon" aria-hidden="true"><use href="#icon-reports"/></svg>Reports</a>
+          <a href="#users" data-view-link="users" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-users"/></svg>Users</a>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="theme-control">
+            <label for="theme-select">Theme</label>
+            <select id="theme-select">
+              <option value="green">Green</option>
+              <option value="blue">Blue</option>
+              <option value="black">Black</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+          <div class="sidebar-footer">
+            <span class="account-icon"><svg class="icon" aria-hidden="true"><use href="#icon-account"/></svg></span>
+            <span id="current-user" class="account"></span>
+            <button id="logout-button" class="icon-button" aria-label="Log out" title="Log out"><svg class="icon" aria-hidden="true"><use href="#icon-logout"/></svg></button>
+          </div>
+        </div>
       </div>
     </aside>
 
-    <main class="workspace">
-      <header class="workspace-header">
-        <div>
-          <label for="project-select">Project</label>
+    <header class="workspace-header">
+      <div class="project-control">
+        <label for="project-select">Project</label>
+        <div class="project-field">
+          <svg class="icon" aria-hidden="true"><use href="#icon-project"/></svg>
           <select id="project-select">
             <option value="">Select a project…</option>
           </select>
         </div>
-        <div class="header-actions">
-          <button id="refresh-button" class="secondary">Refresh</button>
-          <button id="new-project-button" class="secondary">New project</button>
-        </div>
-      </header>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-button" class="secondary refresh-button" aria-label="Refresh" title="Refresh"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>Refresh</span></button>
+        <button id="new-project-button" class="primary"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg>New project</button>
+      </div>
+    </header>
 
+    <main class="workspace">
       <section id="new-project-panel" class="panel" hidden aria-labelledby="new-project-title">
         <h2 id="new-project-title">Create project</h2>
         <form id="new-project-form" class="grid-form">
@@ -85,57 +149,75 @@
       <div id="notice" class="notice" role="status" hidden></div>
 
       <section data-view="dashboard" class="view" hidden aria-labelledby="dashboard-title">
-        <h2 id="dashboard-title">Dashboard</h2>
-        <div id="dashboard-empty" class="empty" hidden></div>
+        <header class="view-heading">
+          <h1 id="dashboard-title">Dashboard</h1>
+          <p>Scan activity and observations for the selected project.</p>
+        </header>
+        <div id="dashboard-empty" class="empty dashboard-empty" hidden></div>
         <div id="dashboard-content">
           <div id="dashboard-metrics" class="metrics"></div>
-          <div class="columns">
-            <div class="panel">
-              <h3>Recent jobs</h3>
+          <div class="dashboard-grid">
+            <section class="panel">
+              <header class="panel-heading">
+                <h2>Recent jobs</h2>
+                <a href="#scans" class="text-action">View scans <svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></a>
+              </header>
               <div id="dashboard-jobs"></div>
-            </div>
-            <div class="panel">
-              <h3>Source availability</h3>
+            </section>
+            <section class="panel">
+              <header class="panel-heading source-heading">
+                <h2>Source availability</h2>
+                <div id="dashboard-worker"></div>
+              </header>
               <div id="dashboard-availability"></div>
-            </div>
-          </div>
-          <div class="panel">
-            <h3>HTTP observations</h3>
-            <div id="dashboard-http"></div>
-          </div>
-          <div class="panel">
-            <h3>Ports</h3>
-            <div id="dashboard-ports"></div>
-          </div>
-          <div class="panel">
-            <h3>Web check coverage</h3>
-            <div id="dashboard-coverage"></div>
+            </section>
+            <section class="panel">
+              <h2>HTTP observations</h2>
+              <div id="dashboard-http"></div>
+            </section>
+            <section class="panel">
+              <h2>Ports</h2>
+              <div id="dashboard-ports"></div>
+            </section>
+            <section class="panel dashboard-coverage">
+              <h2>Web check coverage</h2>
+              <div id="dashboard-coverage"></div>
+            </section>
           </div>
         </div>
       </section>
 
       <section data-view="scope" class="view" hidden aria-labelledby="scope-title">
-        <h2 id="scope-title">Scope</h2>
-        <div id="scope-status" class="panel"></div>
+        <header class="view-heading">
+          <h1 id="scope-title">Scope</h1>
+          <p>Define the targets this project is authorized to scan.</p>
+        </header>
+        <div id="scope-status" class="panel scope-status"></div>
         <div class="panel">
-          <h3>Rules</h3>
+          <h2>Rules</h2>
           <p class="muted">Exclusions take priority. DNS names, IPs and CIDRs are normalized. Editing creates a new immutable revision.</p>
           <div id="scope-rules"></div>
           <div class="rule-editor">
-            <label for="rule-kind">Kind</label>
-            <select id="rule-kind">
-              <option value="exact_domain">Exact DNS name</option>
-              <option value="subdomain_tree">DNS tree with subdomains</option>
-              <option value="ip">IPv4/IPv6 address</option>
-              <option value="cidr">CIDR range</option>
-            </select>
-            <label for="rule-value">Value</label>
-            <input id="rule-value" placeholder="example.com">
+            <div class="field">
+              <label for="rule-kind">Kind</label>
+              <select id="rule-kind">
+                <option value="exact_domain">Exact DNS name</option>
+                <option value="subdomain_tree">DNS tree with subdomains</option>
+                <option value="ip">IPv4/IPv6 address</option>
+                <option value="cidr">CIDR range</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="rule-value">Value</label>
+              <input id="rule-value" placeholder="DNS name, IP or CIDR">
+            </div>
             <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
             <button id="add-rule-button" class="secondary">Add rule</button>
           </div>
-          <label for="scope-note">Revision note</label>
-          <input id="scope-note" placeholder="Why this revision changed">
+          <div class="field scope-note">
+            <label for="scope-note">Revision note</label>
+            <input id="scope-note" placeholder="Why this revision changed">
+          </div>
           <div class="button-row">
             <button id="save-scope-button" class="secondary">Save draft</button>
             <button id="save-approve-scope-button" class="primary">Save and approve</button>
@@ -144,63 +226,87 @@
           <p id="scope-error" class="error" role="alert"></p>
         </div>
         <div class="panel">
-          <h3>Revision history</h3>
+          <h2>Revision history</h2>
           <div id="scope-history"></div>
         </div>
       </section>
 
       <section data-view="scans" class="view" hidden aria-labelledby="scans-title">
-        <h2 id="scans-title">Scans</h2>
-        <div class="panel">
-          <h3>Submit job</h3>
-          <p class="muted">Parameters are typed JSON. Explicit targets must be inside the approved scope. The worker never runs shell strings.</p>
-          <label for="task-type">Task type</label>
-          <select id="task-type"></select>
-          <p id="task-availability" class="muted"></p>
-          <label for="task-params">Parameters (JSON)</label>
-          <textarea id="task-params" rows="6" spellcheck="false">{}</textarea>
-          <label for="idempotency-key">Idempotency key (optional)</label>
-          <input id="idempotency-key">
-          <div class="button-row">
-            <button id="submit-job-button" class="primary">Submit</button>
-            <button id="submit-chain-button" class="secondary">Run All in one chain</button>
-          </div>
-          <p id="scan-error" class="error" role="alert"></p>
-        </div>
-        <div class="panel">
-          <h3>Job history</h3>
-          <div id="jobs-list"></div>
+        <header class="view-heading">
+          <h1 id="scans-title">Scans</h1>
+          <p>Run tasks against approved targets and review their results.</p>
+        </header>
+        <div class="scan-grid">
+          <section class="panel">
+            <h2>Submit job</h2>
+            <p class="muted">Parameters are typed JSON. Explicit targets must be inside the approved scope. The worker never runs shell strings.</p>
+            <div class="field">
+              <label for="task-type">Task type</label>
+              <select id="task-type" aria-describedby="task-availability"></select>
+              <p id="task-availability" class="muted field-hint"></p>
+            </div>
+            <div class="field">
+              <label for="task-params">Parameters (JSON)</label>
+              <textarea id="task-params" rows="6" spellcheck="false">{}</textarea>
+            </div>
+            <div class="field">
+              <label for="idempotency-key">Idempotency key <span class="muted">(optional)</span></label>
+              <input id="idempotency-key">
+            </div>
+            <div class="button-row">
+              <button id="submit-job-button" class="primary">Submit job</button>
+              <button id="submit-chain-button" class="secondary">Run full scan chain</button>
+            </div>
+            <p id="scan-error" class="error" role="alert"></p>
+          </section>
+          <section class="panel">
+            <h2>Job history</h2>
+            <div id="jobs-list"></div>
+          </section>
         </div>
       </section>
 
       <section data-view="assets" class="view" hidden aria-labelledby="assets-title">
-        <h2 id="assets-title">Assets</h2>
-        <div class="panel"><h3>Hosts</h3><div id="assets-hosts"></div></div>
-        <div class="panel"><h3>IP addresses</h3><div id="assets-ips"></div></div>
-        <div class="panel"><h3>URLs</h3><div id="assets-urls"></div></div>
+        <header class="view-heading">
+          <h1 id="assets-title">Assets</h1>
+          <p>Hosts, IP addresses and URLs discovered in this project.</p>
+        </header>
+        <section class="panel"><h2>Hosts</h2><div id="assets-hosts"></div></section>
+        <section class="panel"><h2>IP addresses</h2><div id="assets-ips"></div></section>
+        <section class="panel"><h2>URLs</h2><div id="assets-urls"></div></section>
       </section>
 
       <section data-view="findings" class="view" hidden aria-labelledby="findings-title">
-        <h2 id="findings-title">Findings</h2>
+        <header class="view-heading">
+          <h1 id="findings-title">Findings</h1>
+          <p>Review identified issues by severity and affected asset.</p>
+        </header>
         <div id="findings-summary" class="metrics"></div>
-        <div class="panel"><div id="findings-table"></div></div>
+        <section class="panel"><h2>Finding details</h2><div id="findings-table"></div></section>
       </section>
 
       <section data-view="reports" class="view" hidden aria-labelledby="reports-title">
-        <h2 id="reports-title">Reports</h2>
-        <div class="panel">
+        <header class="view-heading">
+          <h1 id="reports-title">Reports</h1>
+          <p>Download a snapshot of the selected project.</p>
+        </header>
+        <section class="panel report-panel">
+          <h2>Export project data</h2>
           <p>Reports are built from the current normalized project snapshot. JSON includes scope, history, DNS, HTTP, services, sources and findings. CSV neutralizes external values that could be interpreted as formulas.</p>
           <div class="button-row">
-            <button id="export-json-button" class="primary">Export JSON</button>
-            <button id="export-csv-button" class="secondary">Export CSV</button>
+            <button id="export-json-button" class="primary"><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>Export JSON</button>
+            <button id="export-csv-button" class="secondary"><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>Export CSV</button>
           </div>
-        </div>
+        </section>
       </section>
 
       <section data-view="users" class="view" hidden aria-labelledby="users-title">
-        <h2 id="users-title">Users and audit</h2>
+        <header class="view-heading">
+          <h1 id="users-title">Users and audit</h1>
+          <p>Manage access to LasTest and review account activity.</p>
+        </header>
         <div class="panel">
-          <h3>Create user</h3>
+          <h2>Create user</h2>
           <form id="user-form" class="grid-form">
             <label for="user-username">Username</label>
             <input id="user-username" required>
@@ -212,8 +318,8 @@
           </form>
           <p id="user-error" class="error" role="alert"></p>
         </div>
-        <div class="panel"><h3>Users</h3><div id="users-list"></div></div>
-        <div class="panel"><h3>Audit log</h3><div id="audit-list"></div></div>
+        <section class="panel"><h2>Users</h2><div id="users-list"></div></section>
+        <section class="panel"><h2>Audit log</h2><div id="audit-list"></div></section>
       </section>
     </main>
   </div>

@@ -271,7 +271,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/audit", get(admin::audit))
         .route("/", get(static_ui::index))
         .route("/app.js", get(static_ui::app_js))
+        .route("/theme.js", get(static_ui::theme_js))
         .route("/styles.css", get(static_ui::styles))
+        .route(
+            "/fonts/instrument-sans.woff2",
+            get(static_ui::instrument_sans),
+        )
+        .route("/fonts/OFL.txt", get(static_ui::font_license))
         .fallback(static_ui::index)
         .with_state(state)
 }
