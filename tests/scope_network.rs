@@ -1,4 +1,4 @@
-mod v2_support;
+mod support;
 
 use lastest::scope::{
     canonical_cidr, canonical_ip, canonical_url_key, normalize_domain, EffectiveScope,
@@ -6,7 +6,7 @@ use lastest::scope::{
 };
 use lastest::tasks;
 use serde_json::json;
-use v2_support::{scope_rules, spawn_http_server, HttpResponse, TestEnv};
+use support::{scope_rules, spawn_http_server, HttpResponse, TestEnv};
 
 fn scope(items: &[(&str, &str, bool)]) -> Scope {
     let rules = items
@@ -225,7 +225,7 @@ async fn blocked_internal_destination_never_opens_a_socket() {
 fn active_task_uses_current_scope_on_the_next_network_operation() {
     let env = TestEnv::new();
     let snapshot_scope = scope(&[("tree", "example.com", false)]);
-    let ctx = v2_support::task_context(&env, snapshot_scope, "narrow-active");
+    let ctx = support::task_context(&env, snapshot_scope, "narrow-active");
     assert!(ctx.allows_host_now("www.example.com"));
     let current = env.db.current_scope(&ctx.project_id).unwrap().unwrap();
     env.db

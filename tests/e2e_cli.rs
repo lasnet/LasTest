@@ -1,11 +1,11 @@
-mod v2_support;
+mod support;
 
 use serde_json::Value;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+use support::{spawn_http_server, HttpResponse};
 use tempfile::TempDir;
-use v2_support::{spawn_http_server, HttpResponse};
 
 struct ChildGuard(Child);
 
@@ -86,11 +86,7 @@ fn start_process(data_dir: &std::path::Path, bind: &str, mode: &str) -> ChildGua
 async fn wait_ready(base: &str) {
     let client = reqwest::Client::new();
     for _ in 0..100 {
-        if let Ok(response) = client
-            .get(format!("{base}/api/v2/health/ready"))
-            .send()
-            .await
-        {
+        if let Ok(response) = client.get(format!("{base}/api/health/ready")).send().await {
             if response.status().is_success() {
                 return;
             }
@@ -157,7 +153,7 @@ async fn cli_doctor_bootstrap_workflow_persistence_and_import_smoke() {
         .text()
         .await
         .unwrap();
-    assert!(js.contains("/api/v2/auth/login"));
+    assert!(js.contains("/api/auth/login"));
     assert!(!js.contains("mock data"));
 
     let login = cli_json(
@@ -372,7 +368,7 @@ async fn cli_import_dry_run_and_apply_smoke() {
     let temp = TempDir::new().unwrap();
     let data_dir = temp.path().join("data");
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v2/legacy/projects");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy/projects");
     let dry = cli_json(
         &data_dir,
         &[

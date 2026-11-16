@@ -1,8 +1,91 @@
-mod v2_support;
+mod support;
 
 use axum::http::{Method, StatusCode};
 use serde_json::json;
-use v2_support::{as_pairs, call, cookie_headers, TestEnv};
+use support::{as_pairs, call, cookie_headers, TestEnv};
+
+#[tokio::test]
+async fn setup_codes_expire_rotate_and_are_consumed_atomically() {
+    let env = TestEnv::empty();
+    let route = "/api/auth/setup";
+    let headers = [("Host", "localhost"), ("Origin", "http://localhost")];
+    let credentials = |code: &str| {
+        Some(json!({
+            "code": code,
+            "username": "admin",
+            "password": "CorrectHorseBatteryStaple!"
+        }))
+    };
+    let status = call(&env.app, Method::GET, route, None, &[]).await;
+    assert_eq!(status.body["required"], true);
+
+    let (old, _) = env.auth.issue_setup_code().unwrap();
+    let (code, _) = env.auth.issue_setup_code().unwrap();
+    let response = call(&env.app, Method::POST, route, credentials(&old), &headers).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let response = call(
+        &env.app,
+        Method::POST,
+        route,
+        credentials(&code),
+        &[("Host", "localhost"), ("Origin", "https://outside.example")],
+    )
+    .await;
+    assert_eq!(response.body["error"]["code"], "csrf_failed");
+    env.db
+        .connect()
+        .unwrap()
+        .execute("UPDATE setup_code SET expires_at = 0", [])
+        .unwrap();
+    let response = call(&env.app, Method::POST, route, credentials(&code), &headers).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(env.db.count_users().unwrap(), 0);
+
+    let (code, _) = env.auth.issue_setup_code().unwrap();
+    let first = call(&env.app, Method::POST, route, credentials(&code), &headers);
+    let second = call(&env.app, Method::POST, route, credentials(&code), &headers);
+    let (first, second) = tokio::join!(first, second);
+    let mut codes = [first.status, second.status];
+    codes.sort();
+    assert_eq!(codes[0], StatusCode::CREATED);
+    assert!(matches!(
+        codes[1],
+        StatusCode::FORBIDDEN | StatusCode::CONFLICT
+    ));
+    assert_eq!(env.db.count_users().unwrap(), 1);
+    assert!(env.auth.issue_setup_code().is_err());
+    let status = call(&env.app, Method::GET, route, None, &[]).await;
+    assert_eq!(status.body["required"], false);
+    assert!(env
+        .auth
+        .login("admin", "CorrectHorseBatteryStaple!", "web")
+        .is_ok());
+}
+
+#[test]
+fn existing_database_migrates_without_reopening_administrator_setup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("lastest.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!("../migrations/0001_init.sql"))
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT);
+             INSERT INTO schema_migrations VALUES (1, '2026-11-15T00:00:00Z');
+             INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+             VALUES ('existing', 'admin', 'existing-hash', 'admin', '', '');",
+        )
+        .unwrap();
+    }
+    let db = lastest::db::Db::new(path).unwrap();
+    assert_eq!(db.schema_version().unwrap(), lastest::db::SCHEMA_VERSION);
+    assert_eq!(
+        db.user_by_username("admin").unwrap().unwrap().id,
+        "existing"
+    );
+    assert!(!db.store_setup_code("unavailable", i64::MAX).unwrap());
+}
 
 #[tokio::test]
 async fn login_cookie_me_logout_and_revocation() {
@@ -10,7 +93,7 @@ async fn login_cookie_me_logout_and_revocation() {
     let response = call(
         &env.app,
         Method::POST,
-        "/api/v2/auth/login",
+        "/api/auth/login",
         Some(json!({"username": "admin", "password": "CorrectHorseBatteryStaple!"})),
         &[("Host", "localhost"), ("Origin", "http://localhost")],
     )
@@ -30,7 +113,7 @@ async fn login_cookie_me_logout_and_revocation() {
     let me = call(
         &env.app,
         Method::GET,
-        "/api/v2/auth/me",
+        "/api/auth/me",
         None,
         &[("Host", "localhost"), ("Cookie", &cookie_pair)],
     )
@@ -41,7 +124,7 @@ async fn login_cookie_me_logout_and_revocation() {
     let logout = call(
         &env.app,
         Method::POST,
-        "/api/v2/auth/logout",
+        "/api/auth/logout",
         Some(json!({})),
         &[
             ("Host", "localhost"),
@@ -54,7 +137,7 @@ async fn login_cookie_me_logout_and_revocation() {
     let after = call(
         &env.app,
         Method::GET,
-        "/api/v2/auth/me",
+        "/api/auth/me",
         None,
         &[("Host", "localhost"), ("Cookie", &cookie_pair)],
     )
@@ -76,7 +159,7 @@ async fn expired_session_is_rejected() {
     let response = call(
         &env.app,
         Method::GET,
-        "/api/v2/auth/me",
+        "/api/auth/me",
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -91,7 +174,7 @@ async fn csrf_origin_check_for_cookie_requests() {
     let missing = call(
         &env.app,
         Method::POST,
-        "/api/v2/projects",
+        "/api/projects",
         Some(json!({"name": "csrf-missing"})),
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -101,7 +184,7 @@ async fn csrf_origin_check_for_cookie_requests() {
     let mismatched = call(
         &env.app,
         Method::POST,
-        "/api/v2/projects",
+        "/api/projects",
         Some(json!({"name": "csrf-mismatch"})),
         &[
             ("Host", "localhost"),
@@ -114,7 +197,7 @@ async fn csrf_origin_check_for_cookie_requests() {
     let allowed = call(
         &env.app,
         Method::POST,
-        "/api/v2/projects",
+        "/api/projects",
         Some(json!({"name": "csrf-ok"})),
         &[
             ("Host", "localhost"),
@@ -149,7 +232,7 @@ async fn roles_viewer_analyst_admin_and_audit() {
     let read = call(
         &env.app,
         Method::GET,
-        "/api/v2/projects",
+        "/api/projects",
         None,
         &[("Host", "localhost"), ("Cookie", &viewer_cookie)],
     )
@@ -158,7 +241,7 @@ async fn roles_viewer_analyst_admin_and_audit() {
     let write = call(
         &env.app,
         Method::POST,
-        "/api/v2/projects",
+        "/api/projects",
         Some(json!({"name": "viewer-project"})),
         &[
             ("Host", "localhost"),
@@ -171,7 +254,7 @@ async fn roles_viewer_analyst_admin_and_audit() {
     let audit_forbidden = call(
         &env.app,
         Method::GET,
-        "/api/v2/audit",
+        "/api/audit",
         None,
         &[("Host", "localhost"), ("Cookie", &viewer_cookie)],
     )
@@ -182,7 +265,7 @@ async fn roles_viewer_analyst_admin_and_audit() {
     let audit = call(
         &env.app,
         Method::GET,
-        "/api/v2/audit?limit=200",
+        "/api/audit?limit=200",
         None,
         &[("Host", "localhost"), ("Cookie", &admin_cookie)],
     )
@@ -205,7 +288,7 @@ async fn last_active_admin_cannot_be_disabled_or_demoted() {
     let me = call(
         &env.app,
         Method::GET,
-        "/api/v2/auth/me",
+        "/api/auth/me",
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -214,7 +297,7 @@ async fn last_active_admin_cannot_be_disabled_or_demoted() {
     let disable = call(
         &env.app,
         Method::PATCH,
-        &format!("/api/v2/users/{admin_id}"),
+        &format!("/api/users/{admin_id}"),
         Some(json!({"is_active": false})),
         &[
             ("Host", "localhost"),
@@ -228,7 +311,7 @@ async fn last_active_admin_cannot_be_disabled_or_demoted() {
     let demote = call(
         &env.app,
         Method::PATCH,
-        &format!("/api/v2/users/{admin_id}"),
+        &format!("/api/users/{admin_id}"),
         Some(json!({"role": "viewer"})),
         &[
             ("Host", "localhost"),
@@ -246,7 +329,7 @@ async fn cli_bearer_login_and_generic_login_failures() {
     let cli = call(
         &env.app,
         Method::POST,
-        "/api/v2/auth/login",
+        "/api/auth/login",
         Some(json!({
             "username": "admin",
             "password": "CorrectHorseBatteryStaple!",
@@ -261,7 +344,7 @@ async fn cli_bearer_login_and_generic_login_failures() {
     let me = call(
         &env.app,
         Method::GET,
-        "/api/v2/auth/me",
+        "/api/auth/me",
         None,
         &[
             ("Host", "localhost"),
@@ -274,7 +357,7 @@ async fn cli_bearer_login_and_generic_login_failures() {
     let bad_user = call(
         &env.app,
         Method::POST,
-        "/api/v2/auth/login",
+        "/api/auth/login",
         Some(json!({"username": "nobody", "password": "whatever"})),
         &[("Host", "localhost")],
     )
@@ -282,7 +365,7 @@ async fn cli_bearer_login_and_generic_login_failures() {
     let bad_password = call(
         &env.app,
         Method::POST,
-        "/api/v2/auth/login",
+        "/api/auth/login",
         Some(json!({"username": "admin", "password": "wrong-password"})),
         &[("Host", "localhost")],
     )
@@ -302,7 +385,7 @@ async fn task_catalog_and_project_requires_selection_semantics() {
     let types = call(
         &env.app,
         Method::GET,
-        "/api/v2/task-types",
+        "/api/task-types",
         None,
         &[("Host", "localhost"), ("Cookie", &viewer_cookie)],
     )

@@ -1,4 +1,4 @@
-mod v2_support;
+mod support;
 
 use axum::http::{Method, StatusCode};
 use lastest::domain::JobStatus;
@@ -6,7 +6,7 @@ use lastest::worker::Worker;
 use serde_json::json;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use v2_support::{call, spawn_http_server, HttpResponse, TestEnv};
+use support::{call, spawn_http_server, HttpResponse, TestEnv};
 
 #[tokio::test]
 async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
@@ -15,7 +15,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let project = call(
         &env.app,
         Method::POST,
-        "/api/v2/projects",
+        "/api/projects",
         Some(json!({"name": "api-flow", "client": "ACME"})),
         &[
             ("Host", "localhost"),
@@ -29,7 +29,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let blocked = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/jobs"),
+        &format!("/api/projects/{project_id}/jobs"),
         Some(json!({"task_type": "dns.records", "params": {}})),
         &[
             ("Host", "localhost"),
@@ -44,7 +44,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let draft = call(
         &env.app,
         Method::PUT,
-        &format!("/api/v2/projects/{project_id}/scope"),
+        &format!("/api/projects/{project_id}/scope"),
         Some(json!({
             "rules": [{"kind": "exact_domain", "value": "localhost"}],
             "expected_version": 1,
@@ -63,7 +63,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let stale = call(
         &env.app,
         Method::PUT,
-        &format!("/api/v2/projects/{project_id}/scope"),
+        &format!("/api/projects/{project_id}/scope"),
         Some(json!({
             "rules": [{"kind": "exact_domain", "value": "localhost"}],
             "expected_version": 1
@@ -81,7 +81,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let approved = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/scope/2/approve"),
+        &format!("/api/projects/{project_id}/scope/2/approve"),
         Some(json!({})),
         &[
             ("Host", "localhost"),
@@ -94,7 +94,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let scope = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/projects/{project_id}/scope?version=1"),
+        &format!("/api/projects/{project_id}/scope?version=1"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -116,7 +116,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let first = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/jobs"),
+        &format!("/api/projects/{project_id}/jobs"),
         Some(body.clone()),
         &[
             ("Host", "localhost"),
@@ -130,7 +130,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let replay = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/jobs"),
+        &format!("/api/projects/{project_id}/jobs"),
         Some(body),
         &[
             ("Host", "localhost"),
@@ -143,7 +143,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let conflict = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/jobs"),
+        &format!("/api/projects/{project_id}/jobs"),
         Some(json!({
             "task_type": "http.probe",
             "params": {"targets": [format!("http://localhost:{}/other", server.addr.port())], "mode": "url"},
@@ -176,7 +176,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let dashboard = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/projects/{project_id}/dashboard"),
+        &format!("/api/projects/{project_id}/dashboard"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -189,7 +189,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let job = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/jobs/{job_id}"),
+        &format!("/api/jobs/{job_id}"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -201,7 +201,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let evidence = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/evidence/{artifact_id}"),
+        &format!("/api/evidence/{artifact_id}"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -212,7 +212,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let report = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/projects/{project_id}/reports/json"),
+        &format!("/api/projects/{project_id}/reports/json"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -223,7 +223,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let csv = call(
         &env.app,
         Method::GET,
-        &format!("/api/v2/projects/{project_id}/reports/csv"),
+        &format!("/api/projects/{project_id}/reports/csv"),
         None,
         &[("Host", "localhost"), ("Cookie", &cookie)],
     )
@@ -234,7 +234,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let pending = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/projects/{project_id}/jobs"),
+        &format!("/api/projects/{project_id}/jobs"),
         Some(json!({"task_type": "dns.records", "params": {"targets": ["localhost"]}})),
         &[
             ("Host", "localhost"),
@@ -247,7 +247,7 @@ async fn scope_approval_idempotency_dashboard_evidence_and_reports() {
     let cancelled = call(
         &env.app,
         Method::POST,
-        &format!("/api/v2/jobs/{pending_id}/cancel"),
+        &format!("/api/jobs/{pending_id}/cancel"),
         Some(json!({})),
         &[
             ("Host", "localhost"),

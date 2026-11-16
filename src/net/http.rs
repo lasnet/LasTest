@@ -180,7 +180,7 @@ impl HttpProber {
                 .redirect(Policy::none())
                 .timeout(self.config.http_timeout())
                 .connect_timeout(self.config.http_timeout())
-                .user_agent("LasTest/2.0 authorized-assessment")
+                .user_agent("LasTest authorized-assessment")
                 .no_proxy()
                 .resolve(&host, SocketAddr::new(ip, port))
                 .build()

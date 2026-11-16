@@ -13,8 +13,11 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const SCHEMA_VERSION: i64 = 1;
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../../migrations/0001_init.sql"))];
+pub const SCHEMA_VERSION: i64 = 2;
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../../migrations/0001_init.sql")),
+    (2, include_str!("../../migrations/0002_setup_code.sql")),
+];
 
 #[derive(Clone, Debug)]
 pub struct Db {
@@ -118,21 +121,14 @@ impl Db {
         entity_id: Option<&str>,
         details: &Value,
     ) -> Result<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT INTO audit_events(id, actor, action, entity_type, entity_id, details, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                crate::domain::new_id("aud"),
-                actor,
-                action,
-                entity_type,
-                entity_id,
-                details.to_string(),
-                crate::domain::now_rfc3339()
-            ],
-        )?;
-        Ok(())
+        insert_audit(
+            &self.connect()?,
+            actor,
+            action,
+            entity_type,
+            entity_id,
+            details,
+        )
     }
 
     pub fn backup_to(&self, destination: &Path) -> Result<()> {
@@ -143,6 +139,30 @@ impl Db {
         conn.execute("VACUUM INTO ?1", params![destination.to_string_lossy()])?;
         Ok(())
     }
+}
+
+fn insert_audit(
+    conn: &Connection,
+    actor: &str,
+    action: &str,
+    entity_type: &str,
+    entity_id: Option<&str>,
+    details: &Value,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO audit_events(id, actor, action, entity_type, entity_id, details, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            crate::domain::new_id("aud"),
+            actor,
+            action,
+            entity_type,
+            entity_id,
+            details.to_string(),
+            crate::domain::now_rfc3339()
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn json_or_empty(raw: String) -> Value {

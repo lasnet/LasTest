@@ -90,7 +90,7 @@
       init.body = JSON.stringify(options.body);
     }
     const response = await fetch(path, init);
-    if (response.status === 401) {
+    if (response.status === 401 && path !== "/api/auth/login") {
       showLogin();
       throw new Error("Session expired. Sign in again.");
     }
@@ -119,6 +119,8 @@
   function showLogin() {
     $("#app-view").hidden = true;
     $("#login-view").hidden = false;
+    $("#setup-form").hidden = true;
+    $("#login-form").hidden = false;
     $("#login-password").value = "";
   }
 
@@ -139,7 +141,7 @@
 
   async function boot() {
     try {
-      const value = await api("/api/v2/auth/me");
+      const value = await api("/api/auth/me");
       state.me = value.user;
       showApp();
       await loadProjects();
@@ -147,11 +149,18 @@
       route();
     } catch (_) {
       showLogin();
+      try {
+        const setup = await api("/api/auth/setup");
+        $("#setup-form").hidden = !setup.required;
+        $("#login-form").hidden = setup.required;
+      } catch (error) {
+        $("#login-error").textContent = error.message;
+      }
     }
   }
 
   async function loadProjects() {
-    const value = await api("/api/v2/projects?limit=500");
+    const value = await api("/api/projects?limit=500");
     state.projects = value.items || [];
     const select = $("#project-select");
     clear(select);
@@ -173,7 +182,7 @@
 
   async function loadTaskTypes() {
     try {
-      const value = await api("/api/v2/task-types");
+      const value = await api("/api/task-types");
       state.taskTypes = value.task_types || [];
       const select = $("#task-type");
       clear(select);
@@ -266,7 +275,7 @@
 
   async function loadDashboard() {
     if (!requireProject()) return;
-    const value = await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/dashboard`);
+    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/dashboard`);
     state.dashboard = value;
     renderDashboard();
     renderAssets();
@@ -275,7 +284,7 @@
 
   async function loadScope() {
     if (!requireProject()) return;
-    const value = await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/scope`);
+    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope`);
     state.scope = value.scope;
     state.scopeHistory = value.history || [];
     state.rules = (value.scope.rules || []).map((rule) => ({ ...rule }));
@@ -284,7 +293,7 @@
 
   async function loadJobs() {
     if (!requireProject()) return;
-    const value = await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/jobs?limit=100`);
+    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/jobs?limit=100`);
     state.jobs = value.items || [];
     renderJobs();
   }
@@ -383,7 +392,7 @@
         cancel.type = "button";
         cancel.addEventListener("click", async () => {
           try {
-            await api(`/api/v2/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: {} });
+            await api(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: {} });
             await loadJobs();
           } catch (error) { notice(error.message, "error"); }
         });
@@ -538,8 +547,8 @@
 
   async function loadAdmin() {
     if (state.me?.role !== "admin") return;
-    const users = await api("/api/v2/users?limit=200");
-    const audit = await api("/api/v2/audit?limit=100");
+    const users = await api("/api/users?limit=200");
+    const audit = await api("/api/audit?limit=100");
     renderUsers(users.items || [], audit.items || []);
   }
 
@@ -557,7 +566,7 @@
         toggle.type = "button";
         toggle.addEventListener("click", async () => {
           try {
-            await api(`/api/v2/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { is_active: !user.is_active } });
+            await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { is_active: !user.is_active } });
             await loadAdmin();
           } catch (error) { $("#user-error").textContent = error.message; }
         });
@@ -565,7 +574,7 @@
         promote.type = "button";
         promote.addEventListener("click", async () => {
           try {
-            await api(`/api/v2/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { role: user.role === "admin" ? "viewer" : "admin" } });
+            await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { role: user.role === "admin" ? "viewer" : "admin" } });
             await loadAdmin();
           } catch (error) { $("#user-error").textContent = error.message; }
         });
@@ -589,7 +598,7 @@
   async function downloadReport(format) {
     if (!requireProject()) return;
     try {
-      const blob = await apiBytes(`/api/v2/projects/${encodeURIComponent(state.projectId)}/reports/${format}`);
+      const blob = await apiBytes(`/api/projects/${encodeURIComponent(state.projectId)}/reports/${format}`);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -604,12 +613,43 @@
     }
   }
 
+  $("#setup-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const error = $("#setup-error");
+    const button = form.querySelector("button");
+    error.textContent = "";
+    button.disabled = true;
+    try {
+      const result = await api("/api/auth/setup", {
+        method: "POST",
+        body: {
+          code: $("#setup-code").value,
+          username: $("#setup-username").value,
+          password: $("#setup-password").value,
+        },
+      });
+      form.reset();
+      showLogin();
+      $("#login-username").value = result.user.username;
+      const status = $("#login-status");
+      status.textContent = "Administrator created. Sign in to continue.";
+      status.hidden = false;
+      $("#login-password").focus();
+    } catch (err) {
+      error.textContent = err.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $("#login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const error = $("#login-error");
     error.textContent = "";
+    $("#login-status").hidden = true;
     try {
-      const value = await api("/api/v2/auth/login", {
+      const value = await api("/api/auth/login", {
         method: "POST",
         body: {
           username: $("#login-username").value,
@@ -629,7 +669,7 @@
   });
 
   $("#logout-button").addEventListener("click", async () => {
-    try { await api("/api/v2/auth/logout", { method: "POST", body: {} }); } catch (_) {}
+    try { await api("/api/auth/logout", { method: "POST", body: {} }); } catch (_) {}
     state.me = null;
     state.projectId = "";
     state.project = null;
@@ -648,7 +688,7 @@
   $("#new-project-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const value = await api("/api/v2/projects", {
+      const value = await api("/api/projects", {
         method: "POST",
         body: {
           name: $("#project-name").value,
@@ -688,7 +728,7 @@
     if (!requireProject()) return;
     $("#scope-error").textContent = "";
     try {
-      await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/scope`, {
+      await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope`, {
         method: "PUT",
         body: {
           rules: state.rules,
@@ -711,7 +751,7 @@
   $("#approve-scope-button").addEventListener("click", async () => {
     if (!state.scope) return;
     try {
-      await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/scope/${state.scope.version}/approve`, { method: "POST", body: {} });
+      await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope/${state.scope.version}/approve`, { method: "POST", body: {} });
       await loadScope();
       await loadProjects();
       notice("Scope revision approved.", "info");
@@ -729,7 +769,7 @@
     try { params = JSON.parse($("#task-params").value || "{}"); }
     catch (err) { $("#scan-error").textContent = `Parameters must be valid JSON: ${err.message}`; return; }
     try {
-      await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/jobs`, {
+      await api(`/api/projects/${encodeURIComponent(state.projectId)}/jobs`, {
         method: "POST",
         body: {
           task_type: $("#task-type").value,
@@ -752,7 +792,7 @@
     try { params = JSON.parse($("#task-params").value || "{}"); }
     catch (err) { $("#scan-error").textContent = `Parameters must be valid JSON: ${err.message}`; return; }
     try {
-      await api(`/api/v2/projects/${encodeURIComponent(state.projectId)}/chains`, {
+      await api(`/api/projects/${encodeURIComponent(state.projectId)}/chains`, {
         method: "POST",
         body: {
           domains: params.domains || [],
@@ -772,7 +812,7 @@
     event.preventDefault();
     $("#user-error").textContent = "";
     try {
-      await api("/api/v2/users", {
+      await api("/api/users", {
         method: "POST",
         body: {
           username: $("#user-username").value,

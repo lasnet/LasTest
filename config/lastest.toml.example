@@ -1,6 +1,6 @@
-# LasTest 2.0 deployment configuration template.
+# LasTest deployment configuration template.
 # Copy outside the source tree, adjust, and set LASTEST_CONFIG=/path/to/lastest.toml.
-# Environment variables documented in docs/v2/install.md override key settings.
+# Environment variables documented in docs/install.md override key settings.
 
 data_dir = "/data"
 bind = "0.0.0.0:8080"

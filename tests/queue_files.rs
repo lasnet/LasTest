@@ -1,4 +1,4 @@
-mod v2_support;
+mod support;
 
 use lastest::db::jobs::{CompleteOutcome, EnqueueError, NewArtifact, NewFinding, NewObservation};
 use lastest::domain::{JobCounters, JobStatus};
@@ -6,7 +6,7 @@ use lastest::worker::Worker;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use v2_support::{scope_rules, spawn_http_server, HttpResponse, TestEnv};
+use support::{scope_rules, spawn_http_server, HttpResponse, TestEnv};
 
 fn setup_job(
     env: &TestEnv,

@@ -1,4 +1,4 @@
-# LasTest 2.0 release image. The builder toolchain is not present in runtime.
+# LasTest release image. The builder toolchain is not present in runtime.
 FROM rust:1.100-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./

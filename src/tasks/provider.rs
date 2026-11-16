@@ -11,7 +11,7 @@ pub fn client(config: &Config) -> Result<reqwest::Client> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(config.http_timeout())
         .connect_timeout(config.http_timeout())
-        .user_agent("LasTest/2.0 authorized-assessment")
+        .user_agent("LasTest authorized-assessment")
         .no_proxy()
         .build()?)
 }

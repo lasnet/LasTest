@@ -1,15 +1,15 @@
-mod v2_support;
+mod support;
 
 use lastest::scope::Scope;
 use lastest::tasks::{dns_tasks, http_tasks, network, nmap, passive, web_checks};
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use v2_support::{
+use support::{
     encode_dns_name, make_job, scope_rules, spawn_dns_server, spawn_http_server, task_context,
     HttpResponse, TestEnv,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn local_dns_records_and_wildcard_wordlist() {

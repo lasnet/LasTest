@@ -1,6 +1,6 @@
-# API LasTest 2.0
+# API LasTest
 
-Базовый путь: `/api/v2`. Web UI и CLI используют одни и те же маршруты, проверку ролей и scope. Старый HTTP API и JWT 1.x не входят в контракт 2.0.
+Базовый путь: `/api`. Web UI и CLI используют одни и те же маршруты, проверку ролей и scope. Старый HTTP API и JWT 1.x не поддерживаются этим API.
 
 ## Аутентификация
 
@@ -12,6 +12,13 @@
 Пароли: Argon2id. Сессии имеют срок жизни, отзываются при logout и смене пароля/деактивации. Пять неудачных входов блокируют username на настроенный интервал. Ответ на неверного пользователя и неверный пароль одинаковый.
 
 Изменяющие браузерные запросы требуют совпадающий `Origin` (или `Referer`) и `Host`; иначе `403` с кодом `csrf_failed`.
+
+### Первый администратор
+
+- `GET /auth/setup` возвращает `{"required": true}` для базы без пользователей.
+- `POST /auth/setup` принимает `code`, `username` и `password`. Возвращает `201` и объект `user`. После создания пользователя используйте обычный `POST /auth/login`.
+- Код выдаётся локальной командой `lastest admin setup-code` на хосте приложения. В SQLite хранится хэш кода. Код истекает через 15 минут, повторная выдача заменяет предыдущий, а успешная настройка погашает код.
+- Неверный или истёкший код даёт `403 invalid_setup_code`. Если пользователи уже есть, настройка закрыта и возвращает `409 setup_closed`.
 
 Роли:
 
@@ -73,7 +80,7 @@
 ## Создание проекта
 
 ```http
-POST /api/v2/projects
+POST /api/projects
 Content-Type: application/json
 Origin: https://lastest.example.internal
 
@@ -91,7 +98,7 @@ Origin: https://lastest.example.internal
 ## Scope
 
 ```http
-PUT /api/v2/projects/prj_.../scope
+PUT /api/projects/prj_.../scope
 Content-Type: application/json
 Origin: https://lastest.example.internal
 
@@ -109,7 +116,7 @@ Origin: https://lastest.example.internal
 ## Запуск задачи
 
 ```http
-POST /api/v2/projects/prj_.../jobs
+POST /api/projects/prj_.../jobs
 Content-Type: application/json
 Origin: https://lastest.example.internal
 Idempotency-Key: optional
@@ -133,8 +140,8 @@ Idempotency-Key: optional
 {"job":{"id":"job_...","status":"partial","task_type":"http.probe",
  "scope_version":2,"counters":{"targets":2,"processed":1,"skipped":1,"errors":1},
  "error":"...","result":{"format_version":"1"},"artifacts":[
-   {"id":"art_...","kind":"http_probe","size":1234,"sha256":"...","href":"/api/v2/evidence/art_..."}
- ],"links":{"self":"/api/v2/jobs/job_...","cancel":"/api/v2/jobs/job_.../cancel"}}}
+   {"id":"art_...","kind":"http_probe","size":1234,"sha256":"...","href":"/api/evidence/art_..."}
+ ],"links":{"self":"/api/jobs/job_...","cancel":"/api/jobs/job_.../cancel"}}}
 ```
 
 Статусы: `queued`, `running`, `succeeded`, `partial`, `failed`, `cancelled`, `interrupted`. После утраты lease старая попытка не может опубликовать результаты. Активный прогон с возможным побочным эффектом после сбоя требует нового запуска.
@@ -156,12 +163,12 @@ Idempotency-Key: optional
 ## Пользователи
 
 ```http
-POST /api/v2/users
+POST /api/users
 {"username":"analyst1","password":"at-least-12-chars","role":"analyst","must_change_password":true}
 ```
 
 ```http
-PATCH /api/v2/users/usr_...
+PATCH /api/users/usr_...
 {"role":"viewer","is_active":true,"password":"new-password-at-least-12"}
 ```
 

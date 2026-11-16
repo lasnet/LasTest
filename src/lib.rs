@@ -1,4 +1,4 @@
-//! LasTest 2.0 library: shared domain, API, worker and CLI support.
+//! LasTest library: shared domain, API, worker and CLI support.
 
 pub mod api;
 pub mod auth;

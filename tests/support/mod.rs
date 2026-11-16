@@ -29,6 +29,14 @@ pub struct TestEnv {
 
 impl TestEnv {
     pub fn new() -> Self {
+        let env = Self::empty();
+        env.auth
+            .bootstrap("admin", "CorrectHorseBatteryStaple!")
+            .unwrap();
+        env
+    }
+
+    pub fn empty() -> Self {
         let temp = TempDir::new().unwrap();
         let mut config = Config {
             data_dir: temp.path().to_path_buf(),
@@ -48,8 +56,6 @@ impl TestEnv {
         config.ensure_dirs().unwrap();
         let db = Db::new(config.database_path()).unwrap();
         let auth = AuthService::new(db.clone(), config.clone());
-        auth.bootstrap("admin", "CorrectHorseBatteryStaple!")
-            .unwrap();
         let state = Arc::new(lastest::api::AppState::new(config.clone(), db.clone()));
         let app = lastest::api::router(state);
         Self {
@@ -91,7 +97,7 @@ impl TestEnv {
         let response = call(
             &self.app,
             Method::POST,
-            "/api/v2/auth/login",
+            "/api/auth/login",
             Some(serde_json::json!({
                 "username": "admin",
                 "password": "CorrectHorseBatteryStaple!"

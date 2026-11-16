@@ -4,7 +4,7 @@ version = "2.0.0"
 edition = "2021"
 rust-version = "1.100"
 license = "MIT"
-description = "LasTest 2.0 - local-first authorized security assessment platform"
+description = "LasTest - local-first authorized security assessment platform"
 
 [lib]
 name = "lastest"

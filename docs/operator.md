@@ -51,6 +51,7 @@ lastest --data-dir /data auth logout
 Локальные команды с доступом к каталогу данных:
 
 ```bash
+lastest --data-dir /data admin setup-code
 lastest --data-dir /data admin bootstrap --username admin --password-stdin
 lastest --data-dir /data doctor
 lastest --data-dir /data import legacy --projects-dir ./legacy/projects --database ./legacy/lastest.sqlite --dry-run

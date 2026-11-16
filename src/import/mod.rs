@@ -1605,7 +1605,7 @@ fn import_history(
         };
         job.status = status.to_string();
         if status == "cancelled" {
-            job.error = Some("archived: legacy job was never executed by LasTest 2.0".to_string());
+            job.error = Some("archived: legacy job was never executed by LasTest".to_string());
         }
         let revision = db
             .current_scope(target_project)?

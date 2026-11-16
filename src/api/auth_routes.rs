@@ -1,5 +1,5 @@
 use crate::api::{authenticate, validate_origin, ApiError, ApiResult, AppState, Session};
-use crate::auth::SESSION_COOKIE;
+use crate::auth::{AuthService, SESSION_COOKIE};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -14,6 +14,47 @@ pub struct LoginBody {
     pub password: String,
     #[serde(default)]
     pub client: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SetupBody {
+    pub code: String,
+    pub username: String,
+    pub password: String,
+}
+
+pub async fn setup_status(State(state): State<Arc<AppState>>) -> ApiResult {
+    Ok(Json(json!({"required": state.db.count_users()? == 0})))
+}
+
+pub async fn setup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<SetupBody>,
+) -> ApiResult<Response> {
+    validate_origin(&Method::POST, &headers, None)?;
+    if state.db.count_users()? != 0 {
+        return Err(ApiError::conflict(
+            "setup_closed",
+            "administrator setup is closed",
+        ));
+    }
+    AuthService::validate_username(&body.username)
+        .map_err(|error| ApiError::bad_request("invalid_username", error.to_string()))?;
+    AuthService::validate_password(&body.password)
+        .map_err(|error| ApiError::bad_request("invalid_password", error.to_string()))?;
+    let user = tokio::task::spawn_blocking(move || {
+        state
+            .auth
+            .complete_setup(&body.code, &body.username, &body.password)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| {
+        ApiError::forbidden("invalid_setup_code", "the setup code is invalid or expired")
+    })?;
+    Ok((StatusCode::CREATED, Json(json!({"user": user}))).into_response())
 }
 
 pub async fn login(

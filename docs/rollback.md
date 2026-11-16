@@ -5,9 +5,9 @@
 SQLite и файлы доказательств должны соответствовать друг другу. Проще всего остановить worker (и, при необходимости, API), затем выполнить backup.
 
 ```bash
-docker compose --env-file .env.v2 -f compose.v2.yaml stop worker
+docker compose stop worker
 lastest --data-dir /data backup --output /backup/lastest-2026-11-15
-docker compose --env-file .env.v2 -f compose.v2.yaml start worker
+docker compose start worker
 ```
 
 `backup`:
@@ -43,13 +43,13 @@ docker run --rm -v lastest-restore-data:/data \
 
 ## Откат на LasTest 1.x
 
-1. Сохраните новый том 2.0 целиком (или сделайте `lastest backup`).
-2. Сохраните digest текущего образа 2.0.
+1. Сохраните текущий том LasTest целиком (или сделайте `lastest backup`).
+2. Сохраните digest текущего образа LasTest.
 3. Используйте отдельную копию исходников из тега [`v1-legacy`](https://github.com/lasnet/LasTest/tree/v1-legacy) и отдельные `projects/`, `data/`, `logs/` и SQLite 1.x.
 4. Запустите Compose или CLI из этой копии.
-5. Не удаляйте том 2.0: после отката новые результаты 1.x в него не попадут.
+5. Не удаляйте том текущей установки: после отката новые результаты 1.x в него не попадут.
 
-Перед повторным включением 2.0:
+Перед повторным включением LasTest:
 
 - проверьте `doctor` и совместимость схемы;
 - если binary новее схемы — примените миграции новым binary;
@@ -68,7 +68,7 @@ docker run --rm -v lastest-restore-data:/data \
 ## Проверка
 
 ```bash
-cargo test --locked --all-targets --all-features --test v2_import
+cargo test --locked --all-targets --all-features --test import
 ```
 
-Тест открывает backup как новую базу, проверяет версию схемы и наличие проекта. Сквозной `scripts/v2-e2e.sh` проверяет сохранение истории после рестарта.
+Тест открывает backup как новую базу, проверяет версию схемы и наличие проекта. Сквозной `scripts/e2e.sh` проверяет сохранение истории после рестарта.

@@ -30,7 +30,10 @@ button, input, select, textarea { font: inherit; }
 .login-card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line);
   border-radius: 14px; padding: 28px; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
 .login-card h1 { font-size: 26px; }
-.login-card h1 span, .brand span { color: var(--accent); }
+#setup-form { margin-top: 18px; }
+#setup-form h2, #setup-form p, #setup-form pre { margin: 0; }
+#setup-form pre { padding: 10px; background: var(--bg); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#setup-form button { margin-top: 6px; }
 form { display: grid; gap: 8px; }
 label { color: #b5c8dc; font-size: 13px; font-weight: 600; }
 input, select, textarea { width: 100%; background: #0b131d; border: 1px solid var(--line);

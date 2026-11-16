@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LasTest 2.0</title>
+  <title>LasTest</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="login-view" class="login-shell">
     <main class="login-card" aria-labelledby="login-title">
-      <h1 id="login-title">LasTest <span>2.0</span></h1>
+      <h1 id="login-title">LasTest</h1>
       <p class="muted">Authorized local security assessment. Use only on explicitly approved targets.</p>
+      <p id="login-status" role="status" hidden></p>
       <form id="login-form">
         <label for="login-username">Username</label>
         <input id="login-username" name="username" autocomplete="username" required>
@@ -19,12 +20,26 @@
         <button type="submit" class="primary">Sign in</button>
         <p id="login-error" class="error" role="alert"></p>
       </form>
+      <form id="setup-form" hidden aria-labelledby="setup-title">
+        <h2 id="setup-title">Create the first administrator</h2>
+        <p class="muted">Run this command on the server and paste the one-time code. It expires after 15 minutes.</p>
+        <pre><code>docker compose exec api lastest admin setup-code</code></pre>
+        <label for="setup-code">Setup code</label>
+        <input id="setup-code" type="password" autocomplete="off" spellcheck="false" required>
+        <label for="setup-username">Username</label>
+        <input id="setup-username" value="admin" autocomplete="username" required>
+        <label for="setup-password">Password</label>
+        <input id="setup-password" type="password" autocomplete="new-password" required aria-describedby="setup-password-hint">
+        <p id="setup-password-hint" class="muted">Use at least 12 characters.</p>
+        <button type="submit" class="primary">Create administrator</button>
+        <p id="setup-error" class="error" role="alert"></p>
+      </form>
     </main>
   </div>
 
   <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="brand">LasTest <span>2.0</span></div>
+      <div class="brand">LasTest</div>
       <nav aria-label="Main navigation">
         <a href="#dashboard" data-view-link="dashboard">Dashboard</a>
         <a href="#scope" data-view-link="scope">Scope</a>

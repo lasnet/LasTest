@@ -1,8 +1,8 @@
-name: lastest-v2
+name: lastest
 
 services:
   api:
-    image: "${LASTEST_IMAGE:?set LASTEST_IMAGE to a published image digest, e.g. ghcr.io/owner/lastest@sha256:...}"
+    image: "${LASTEST_IMAGE:-ghcr.io/lasnet/lastest:dev}"
     command: ["serve"]
     user: "10001:10001"
     read_only: true
@@ -11,7 +11,7 @@ services:
     environment:
       LASTEST_DATA_DIR: /data
       LASTEST_BIND: 0.0.0.0:8080
-      LASTEST_SECURE_COOKIES: "${LASTEST_SECURE_COOKIES:-true}"
+      LASTEST_SECURE_COOKIES: "${LASTEST_SECURE_COOKIES:-false}"
       LASTEST_INTERNAL_RANGES: "${LASTEST_INTERNAL_RANGES:-}"
       LASTEST_LOG_LEVEL: "${LASTEST_LOG_LEVEL:-info}"
       LASTEST_CERTSPOTTER_TOKEN: "${LASTEST_CERTSPOTTER_TOKEN:-}"
@@ -37,7 +37,7 @@ services:
         max-file: "5"
 
   worker:
-    image: "${LASTEST_IMAGE:?set LASTEST_IMAGE to a published image digest, e.g. ghcr.io/owner/lastest@sha256:...}"
+    image: "${LASTEST_IMAGE:-ghcr.io/lasnet/lastest:dev}"
     command: ["worker"]
     user: "10001:10001"
     read_only: true
@@ -70,4 +70,4 @@ services:
 
 volumes:
   lastest-data:
-    name: lastest-v2-data
+    name: "${LASTEST_DATA_VOLUME:-lastest-data}"

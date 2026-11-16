@@ -1,4 +1,4 @@
-name: LasTest 2.0
+name: LasTest
 
 on:
   push:
@@ -10,16 +10,16 @@ on:
       - "src/**"
       - "migrations/**"
       - "ui/**"
-      - "tests/v2_*.rs"
-      - "tests/v2_support/**"
-      - "tests/fixtures/v2/**"
-      - "config/v2/**"
-      - "docs/v2/**"
-      - "Dockerfile.v2"
-      - "compose.v2.yaml"
-      - ".env.v2.example"
-      - "scripts/v2-e2e.sh"
-      - ".github/workflows/lastest-v2.yml"
+      - "tests/*.rs"
+      - "tests/support/**"
+      - "tests/fixtures/**"
+      - "config/**"
+      - "docs/**"
+      - "Dockerfile"
+      - "compose.yaml"
+      - ".env.example"
+      - "scripts/e2e.sh"
+      - ".github/workflows/lastest.yml"
   pull_request:
   workflow_dispatch:
 
@@ -50,9 +50,7 @@ jobs:
       - name: Diff whitespace
         run: git diff --check
       - name: Compose configuration
-        env:
-          LASTEST_IMAGE: ghcr.io/example/lastest@sha256:0000000000000000000000000000000000000000000000000000000000000000
-        run: docker compose -f compose.v2.yaml config -q
+        run: docker compose config -q
 
   image-amd64:
     runs-on: ubuntu-24.04
@@ -75,16 +73,16 @@ jobs:
           done
       - name: Build image
         run: |
-          docker build --pull -f Dockerfile.v2 \
+          docker build --pull -f Dockerfile \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -t localhost:5000/lastest:v2 .
+            -t localhost:5000/lastest:ci .
       - name: Publish to temporary registry
-        run: docker push localhost:5000/lastest:v2
+        run: docker push localhost:5000/lastest:ci
       - name: Resolve immutable digest
         id: digest
         run: |
-          IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/lastest:v2)"
+          IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/lastest:ci)"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
       - name: Compose pull/up/ps
         env:
@@ -93,20 +91,20 @@ jobs:
           LASTEST_SECURE_COOKIES: "false"
           LASTEST_INTERNAL_RANGES: "127.0.0.0/8"
         run: |
-          docker compose -f compose.v2.yaml config -q
-          docker compose -f compose.v2.yaml pull
-          docker compose -f compose.v2.yaml up -d --no-build
-          docker compose -f compose.v2.yaml ps
+          docker compose config -q
+          docker compose pull
+          docker compose up -d --no-build
+          docker compose ps
           for _ in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:18080/api/v2/health/ready >/dev/null; then break; fi
+            if curl -fsS http://127.0.0.1:18080/api/health/ready >/dev/null; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:18080/api/v2/health/ready
-          docker compose -f compose.v2.yaml down -v
+          curl -fsS http://127.0.0.1:18080/api/health/ready
+          docker compose down -v
       - name: End-to-end image scenario
         env:
           LASTEST_IMAGE: ${{ steps.digest.outputs.image }}
-        run: ./scripts/v2-e2e.sh
+        run: ./scripts/e2e.sh
 
       - name: Publish the tested dev image to GHCR
         id: publish
@@ -117,8 +115,8 @@ jobs:
           image=ghcr.io/lasnet/lastest
           revision_tag="$image:sha-$GITHUB_SHA"
           printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker tag localhost:5000/lastest:v2 "$revision_tag"
-          docker tag localhost:5000/lastest:v2 "$image:dev"
+          docker tag localhost:5000/lastest:ci "$revision_tag"
+          docker tag localhost:5000/lastest:ci "$image:dev"
           docker push "$revision_tag"
           docker push "$image:dev"
           digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$revision_tag" | awk -v prefix="$image@" 'index($0, prefix)==1 {print; exit}')"
@@ -145,19 +143,19 @@ jobs:
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: Pull and start the published image on a fresh runner
         run: |
-          docker compose -f compose.v2.yaml pull
-          docker compose -f compose.v2.yaml up -d --no-build --pull never
-          docker compose -f compose.v2.yaml ps
+          docker compose pull
+          docker compose up -d --no-build --pull never
+          docker compose ps
           for _ in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:18080/api/v2/health/ready >/dev/null; then break; fi
+            if curl -fsS http://127.0.0.1:18080/api/health/ready >/dev/null; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:18080/api/v2/health/ready
+          curl -fsS http://127.0.0.1:18080/api/health/ready
       - name: Run the installation smoke test
-        run: ./scripts/v2-e2e.sh
+        run: ./scripts/e2e.sh
       - name: Remove CI services and data
         if: always()
-        run: docker compose -f compose.v2.yaml down -v
+        run: docker compose down -v
 
   image-arm64:
     runs-on: ubuntu-24.04
@@ -169,4 +167,4 @@ jobs:
       - name: Build arm64 image (validation on arm64 host required before manifest)
         run: |
           docker buildx build --platform linux/arm64 \
-            -f Dockerfile.v2 -t lastest-v2:arm64-check .
+            -f Dockerfile -t lastest:arm64-check .

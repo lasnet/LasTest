@@ -1,4 +1,4 @@
-//! HTTP API v2. Web and CLI use the same routes and authorization checks.
+//! HTTP API. Web and CLI use the same routes and authorization checks.
 
 pub mod admin;
 pub mod auth_routes;
@@ -225,52 +225,50 @@ fn split_authority(value: &str) -> (&str, u16) {
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/v2/health/live", get(static_ui::live))
-        .route("/api/v2/health/ready", get(static_ui::ready))
-        .route("/api/v2/auth/login", post(auth_routes::login))
-        .route("/api/v2/auth/logout", post(auth_routes::logout))
-        .route("/api/v2/auth/me", get(auth_routes::me))
-        .route("/api/v2/task-types", get(jobs::task_types))
+        .route("/api/health/live", get(static_ui::live))
+        .route("/api/health/ready", get(static_ui::ready))
         .route(
-            "/api/v2/projects",
-            get(projects::list).post(projects::create),
+            "/api/auth/setup",
+            get(auth_routes::setup_status).post(auth_routes::setup),
         )
-        .route("/api/v2/projects/{id}", get(projects::get_one))
+        .route("/api/auth/login", post(auth_routes::login))
+        .route("/api/auth/logout", post(auth_routes::logout))
+        .route("/api/auth/me", get(auth_routes::me))
+        .route("/api/task-types", get(jobs::task_types))
+        .route("/api/projects", get(projects::list).post(projects::create))
+        .route("/api/projects/{id}", get(projects::get_one))
         .route(
-            "/api/v2/projects/{id}/scope",
+            "/api/projects/{id}/scope",
             get(projects::get_scope).put(projects::put_scope),
         )
         .route(
-            "/api/v2/projects/{id}/scope/{version}/approve",
+            "/api/projects/{id}/scope/{version}/approve",
             post(projects::approve_scope),
         )
         .route(
-            "/api/v2/projects/{id}/jobs",
+            "/api/projects/{id}/jobs",
             get(jobs::list_jobs).post(jobs::submit_job),
         )
-        .route("/api/v2/jobs/{id}", get(jobs::get_job))
-        .route("/api/v2/jobs/{id}/cancel", post(jobs::cancel_job))
+        .route("/api/jobs/{id}", get(jobs::get_job))
+        .route("/api/jobs/{id}/cancel", post(jobs::cancel_job))
         .route(
-            "/api/v2/projects/{id}/chains",
+            "/api/projects/{id}/chains",
             get(jobs::list_chains).post(jobs::submit_chain),
         )
-        .route("/api/v2/chains/{id}", get(jobs::get_chain))
-        .route("/api/v2/chains/{id}/cancel", post(jobs::cancel_chain))
-        .route("/api/v2/projects/{id}/dashboard", get(dashboard::dashboard))
-        .route("/api/v2/evidence/{id}", get(jobs::get_evidence))
+        .route("/api/chains/{id}", get(jobs::get_chain))
+        .route("/api/chains/{id}/cancel", post(jobs::cancel_chain))
+        .route("/api/projects/{id}/dashboard", get(dashboard::dashboard))
+        .route("/api/evidence/{id}", get(jobs::get_evidence))
         .route(
-            "/api/v2/projects/{id}/reports/{format}",
+            "/api/projects/{id}/reports/{format}",
             get(dashboard::export_report),
         )
         .route(
-            "/api/v2/users",
+            "/api/users",
             get(admin::list_users).post(admin::create_user),
         )
-        .route(
-            "/api/v2/users/{id}",
-            axum::routing::patch(admin::update_user),
-        )
-        .route("/api/v2/audit", get(admin::audit))
+        .route("/api/users/{id}", axum::routing::patch(admin::update_user))
+        .route("/api/audit", get(admin::audit))
         .route("/", get(static_ui::index))
         .route("/app.js", get(static_ui::app_js))
         .route("/styles.css", get(static_ui::styles))

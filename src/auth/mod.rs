@@ -86,17 +86,41 @@ impl AuthService {
             anyhow::bail!("bootstrap refused: users already exist");
         }
         let hash = Self::hash_password(password)?;
-        let user = self
-            .db
-            .insert_user(&username, &hash, Role::Admin, false, Some("bootstrap"))?;
-        self.db.audit(
-            &username,
-            "admin.bootstrap",
-            "user",
-            Some(&user.id),
-            &serde_json::json!({"role": "admin"}),
-        )?;
-        Ok(user)
+        self.db
+            .bootstrap_admin(&username, &hash, None)?
+            .ok_or_else(|| anyhow::anyhow!("bootstrap refused: users already exist"))
+    }
+
+    pub fn issue_setup_code(&self) -> Result<(String, String)> {
+        let (code, hash) = new_token();
+        let expires = chrono::Utc::now() + chrono::Duration::minutes(15);
+        if !self.db.store_setup_code(&hash, expires.timestamp())? {
+            anyhow::bail!("setup code refused: users already exist");
+        }
+        Ok((
+            code,
+            expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ))
+    }
+
+    pub fn complete_setup(
+        &self,
+        code: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<User>> {
+        let code = code.trim();
+        if code.len() != 43 {
+            return Ok(None);
+        }
+        let code_hash = hash_token(code);
+        if !self.db.setup_code_valid(&code_hash)? {
+            return Ok(None);
+        }
+        let username = Self::validate_username(username)?;
+        let password_hash = Self::hash_password(password)?;
+        self.db
+            .bootstrap_admin(&username, &password_hash, Some(&code_hash))
     }
 
     pub fn create_user(

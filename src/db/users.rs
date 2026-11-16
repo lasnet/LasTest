@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::domain::{new_id, now_rfc3339, Role, User};
 use anyhow::{Context, Result};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 
 fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
@@ -22,10 +22,96 @@ fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
     })
 }
 
+fn insert_user_record(
+    conn: &Connection,
+    username: &str,
+    password_hash: &str,
+    role: Role,
+    must_change_password: bool,
+) -> Result<User> {
+    let now = now_rfc3339();
+    let user = User {
+        id: new_id("usr"),
+        username: username.to_string(),
+        role,
+        is_active: true,
+        created_at: now.clone(),
+        updated_at: now,
+        last_login_at: None,
+    };
+    conn.execute(
+        "INSERT INTO users(id, username, password_hash, role, is_active, must_change_password,
+                            created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7)",
+        params![
+            user.id,
+            user.username,
+            password_hash,
+            role.as_str(),
+            i64::from(must_change_password),
+            user.created_at,
+            user.updated_at
+        ],
+    )
+    .with_context(|| format!("cannot create user {username}"))?;
+    Ok(user)
+}
+
+fn can_bootstrap(conn: &Connection, code_hash: Option<&str>) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM users)
+            AND (?1 IS NULL OR EXISTS(
+                SELECT 1 FROM setup_code WHERE token_hash = ?1 AND expires_at > ?2
+            ))",
+        params![code_hash, chrono::Utc::now().timestamp()],
+        |row| row.get(0),
+    )?)
+}
+
 impl Db {
     pub fn count_users(&self) -> Result<i64> {
         let conn = self.connect()?;
         Ok(conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?)
+    }
+
+    pub fn store_setup_code(&self, code_hash: &str, expires_at: i64) -> Result<bool> {
+        let changed = self.connect()?.execute(
+            "INSERT INTO setup_code(id, token_hash, expires_at)
+             SELECT 1, ?1, ?2 WHERE NOT EXISTS(SELECT 1 FROM users)
+             ON CONFLICT(id) DO UPDATE SET
+                token_hash = excluded.token_hash, expires_at = excluded.expires_at",
+            params![code_hash, expires_at],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn setup_code_valid(&self, code_hash: &str) -> Result<bool> {
+        can_bootstrap(&self.connect()?, Some(code_hash))
+    }
+
+    pub fn bootstrap_admin(
+        &self,
+        username: &str,
+        password_hash: &str,
+        code_hash: Option<&str>,
+    ) -> Result<Option<User>> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !can_bootstrap(&tx, code_hash)? {
+            return Ok(None);
+        }
+        let user = insert_user_record(&tx, username, password_hash, Role::Admin, false)?;
+        tx.execute("DELETE FROM setup_code", [])?;
+        super::insert_audit(
+            &tx,
+            username,
+            "admin.bootstrap",
+            "user",
+            Some(&user.id),
+            &serde_json::json!({"role": "admin"}),
+        )?;
+        tx.commit()?;
+        Ok(Some(user))
     }
 
     pub fn user_by_username(&self, username: &str) -> Result<Option<User>> {
@@ -87,31 +173,13 @@ impl Db {
         must_change_password: bool,
         source: Option<&str>,
     ) -> Result<User> {
-        let user = User {
-            id: new_id("usr"),
-            username: username.to_string(),
+        let user = insert_user_record(
+            &self.connect()?,
+            username,
+            password_hash,
             role,
-            is_active: true,
-            created_at: now_rfc3339(),
-            updated_at: now_rfc3339(),
-            last_login_at: None,
-        };
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT INTO users(id, username, password_hash, role, is_active, must_change_password,
-                                created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7)",
-            params![
-                user.id,
-                user.username,
-                password_hash,
-                role.as_str(),
-                i64::from(must_change_password),
-                user.created_at,
-                user.updated_at
-            ],
-        )
-        .with_context(|| format!("cannot create user {username}"))?;
+            must_change_password,
+        )?;
         if let Some(source) = source {
             self.audit(
                 "system",

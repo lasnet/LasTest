@@ -1,6 +1,6 @@
 .env
 .env.*
-!/.env.v2.example
+!/.env.example
 
 /task.md
 /target/
@@ -11,7 +11,7 @@ __pycache__/
 logs/
 data/
 projects/
-!/tests/fixtures/v2/legacy/projects/
+!/tests/fixtures/legacy/projects/
 /lastest-data/
 *.log
 *.sqlite

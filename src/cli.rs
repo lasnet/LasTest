@@ -1,4 +1,4 @@
-//! Operator CLI. Remote commands call the same `/api/v2` routes as the web UI;
+//! Operator CLI. Remote commands call the same `/api` routes as the web UI;
 //! bootstrap, doctor, import, backup and restore operate on the local data dir.
 
 use crate::auth::AuthService;
@@ -13,11 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "lastest",
-    version,
-    about = "LasTest 2.0 local assessment platform"
-)]
+#[command(name = "lastest", version, about = "LasTest local assessment platform")]
 pub struct Cli {
     #[arg(long, global = true, env = "LASTEST_CONFIG")]
     pub config: Option<PathBuf>,
@@ -175,6 +171,9 @@ pub enum ReportCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum AdminCommand {
+    /// Print a one-time code for first-time setup in a browser
+    SetupCode,
+    /// Create the first administrator directly from this machine
     Bootstrap {
         #[arg(long, default_value = "admin")]
         username: String,
@@ -303,7 +302,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
         Command::Project { command } => match command {
             ProjectCommand::List => {
                 let client = CliApi::from_session(&config, None)?;
-                let value = client.get("/api/v2/projects").await?;
+                let value = client.get("/api/projects").await?;
                 print_json(&value)
             }
             ProjectCommand::Create {
@@ -314,7 +313,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
                 let api = CliApi::from_session(&config, None)?;
                 let value = api
                     .post(
-                        "/api/v2/projects",
+                        "/api/projects",
                         &json!({"name": name, "client": client, "description": description}),
                     )
                     .await?;
@@ -325,7 +324,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
             ScopeCommand::Show { project } => {
                 let api = CliApi::from_session(&config, None)?;
                 let value = api
-                    .get(&format!("/api/v2/projects/{}/scope", enc(&project)))
+                    .get(&format!("/api/projects/{}/scope", enc(&project)))
                     .await?;
                 print_json(&value)
             }
@@ -347,7 +346,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
                 let api = CliApi::from_session(&config, None)?;
                 let value = api
                     .put(
-                        &format!("/api/v2/projects/{}/scope", enc(&project)),
+                        &format!("/api/projects/{}/scope", enc(&project)),
                         &json!({
                             "rules": rules,
                             "expected_version": expected_version,
@@ -380,7 +379,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
                 let api = CliApi::from_session(&config, None)?;
                 let value = api
                     .post(
-                        &format!("/api/v2/projects/{}/jobs", enc(&project)),
+                        &format!("/api/projects/{}/jobs", enc(&project)),
                         &json!({
                             "task_type": task_type,
                             "params": params,
@@ -392,13 +391,13 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
             }
             JobCommand::Status { id } => {
                 let api = CliApi::from_session(&config, None)?;
-                let value = api.get(&format!("/api/v2/jobs/{}", enc(&id))).await?;
+                let value = api.get(&format!("/api/jobs/{}", enc(&id))).await?;
                 print_json(&value)
             }
             JobCommand::Cancel { id } => {
                 let api = CliApi::from_session(&config, None)?;
                 let value = api
-                    .post(&format!("/api/v2/jobs/{}/cancel", enc(&id)), &json!({}))
+                    .post(&format!("/api/jobs/{}/cancel", enc(&id)), &json!({}))
                     .await?;
                 print_json(&value)
             }
@@ -415,7 +414,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
                 let api = CliApi::from_session(&config, None)?;
                 let bytes = api
                     .get_bytes(&format!(
-                        "/api/v2/projects/{}/reports/{}",
+                        "/api/projects/{}/reports/{}",
                         enc(&project),
                         format
                     ))
@@ -428,6 +427,17 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
                 Ok(())
             }
         },
+        Command::Admin {
+            command: AdminCommand::SetupCode,
+        } => {
+            config.ensure_dirs()?;
+            let db = Db::new(config.database_path())?;
+            let auth = AuthService::new(db, config);
+            let (code, expires_at) = auth
+                .issue_setup_code()
+                .map_err(|err| CliError::other(format!("{err:#}")))?;
+            print_json(&json!({"code": code, "expires_at": expires_at}))
+        }
         Command::Admin {
             command:
                 AdminCommand::Bootstrap {
@@ -482,7 +492,7 @@ async fn dispatch(cli: Cli) -> CliResult<()> {
         Command::Doctor => doctor(&config),
         Command::TaskTypes => {
             let api = CliApi::from_session(&config, None)?;
-            let value = api.get("/api/v2/task-types").await?;
+            let value = api.get("/api/task-types").await?;
             print_json(&value)
         }
         Command::Backup { output } => backup(&config, &output),
@@ -524,7 +534,7 @@ async fn login(config: &Config, args: LoginArgs) -> CliResult<()> {
     };
     let value = client
         .post(
-            "/api/v2/auth/login",
+            "/api/auth/login",
             &json!({"username": args.username, "password": password, "client": "cli"}),
         )
         .await?;
@@ -556,7 +566,7 @@ async fn logout(config: &Config) -> CliResult<()> {
         base: session.api_url.clone(),
         token: Some(session.token.clone()),
     };
-    client.post("/api/v2/auth/logout", &json!({})).await?;
+    client.post("/api/auth/logout", &json!({})).await?;
     match std::fs::remove_file(session_path(config)) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -678,7 +688,7 @@ impl CliApi {
     fn client(&self) -> reqwest::Client {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
-            .user_agent("lastest-cli/2.0")
+            .user_agent("lastest-cli")
             .build()
             .unwrap_or_default()
     }

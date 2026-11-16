@@ -1,4 +1,4 @@
-mod v2_support;
+mod support;
 
 use lastest::config::Config;
 use lastest::domain::ScopeStatus;
@@ -7,14 +7,13 @@ use rusqlite::params;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use support::TestEnv;
 use tempfile::TempDir;
-use v2_support::TestEnv;
 
 fn fixture() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("v2")
         .join("legacy")
         .join("projects")
 }

@@ -74,12 +74,12 @@ pub fn job_json(state: &AppState, job: &Job) -> Value {
             "size": artifact.size,
             "sha256": artifact.sha256,
             "created_at": artifact.created_at,
-            "href": format!("/api/v2/evidence/{}", artifact.id)
+            "href": format!("/api/evidence/{}", artifact.id)
         })).collect::<Vec<_>>(),
         "links": {
-            "self": format!("/api/v2/jobs/{}", job.id),
-            "cancel": format!("/api/v2/jobs/{}/cancel", job.id),
-            "dashboard": format!("/api/v2/projects/{}/dashboard", job.project_id)
+            "self": format!("/api/jobs/{}", job.id),
+            "cancel": format!("/api/jobs/{}/cancel", job.id),
+            "dashboard": format!("/api/projects/{}/dashboard", job.project_id)
         }
     });
     if let Some(chain) = chain {
