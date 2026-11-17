@@ -130,6 +130,8 @@ PERSISTED="$(cli job status --id "$JOB_ID")"
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["job"]["status"]=="succeeded"' <<<"$PERSISTED"
 
 echo "[9/9] verify runtime excludes Go/Python/compilers and uses a non-root user"
+docker run --rm --entrypoint /usr/local/bin/subfinder "$LASTEST_IMAGE" -version
+cli task-types | python3 -c 'import json,sys; items=json.load(sys.stdin)["task_types"]; assert any(item["name"]=="subdomains.subfinder" and item["available"] for item in items)'
 docker run --rm --entrypoint sh "$LASTEST_IMAGE" -eu -c \
   '! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'
 IMAGE_USER="$(docker image inspect --format '{{.Config.User}}' "$LASTEST_IMAGE")"

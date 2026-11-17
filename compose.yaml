@@ -18,6 +18,7 @@ services:
       LASTEST_CENSYS_API_ID: "${LASTEST_CENSYS_API_ID:-}"
       LASTEST_CENSYS_API_SECRET: "${LASTEST_CENSYS_API_SECRET:-}"
       LASTEST_NMAP_PATH: "${LASTEST_NMAP_PATH:-}"
+      LASTEST_SUBFINDER_PATH: "${LASTEST_SUBFINDER_PATH:-/usr/local/bin/subfinder}"
     ports:
       - target: 8080
         published: "${LASTEST_PORT:-8080}"
@@ -52,6 +53,7 @@ services:
       LASTEST_CENSYS_API_ID: "${LASTEST_CENSYS_API_ID:-}"
       LASTEST_CENSYS_API_SECRET: "${LASTEST_CENSYS_API_SECRET:-}"
       LASTEST_NMAP_PATH: "${LASTEST_NMAP_PATH:-}"
+      LASTEST_SUBFINDER_PATH: "${LASTEST_SUBFINDER_PATH:-/usr/local/bin/subfinder}"
     volumes:
       - lastest-data:/data
     depends_on:

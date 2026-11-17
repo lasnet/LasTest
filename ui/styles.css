@@ -120,7 +120,7 @@ a { color: var(--accent); text-underline-offset: 3px; }
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-code, pre, #task-params { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .icon-library { position: absolute; width: 0; height: 0; overflow: hidden; }
 .icon {
@@ -459,9 +459,6 @@ tbody tr:hover { background: var(--canvas); }
 .rule-editor > .checkbox, .rule-editor > button { margin-top: 25px; }
 .rule-editor input[type="checkbox"] { width: 16px; min-height: auto; height: 16px; margin: 0; }
 
-.scan-grid { display: grid; grid-template-columns: minmax(350px, 5fr) minmax(0, 7fr); gap: var(--gap); align-items: start; }
-.scan-grid .field + .field { margin-top: 12px; }
-#task-params { min-height: 145px; background: var(--soft); font-size: 13px; line-height: 1.6; }
 .job-list { display: grid; }
 .job-card { display: grid; gap: 7px; min-width: 0; padding: 12px 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
 .job-card:last-child { padding-bottom: 0; }
@@ -476,7 +473,6 @@ tbody tr:hover { background: var(--canvas); }
 
 
 @media (max-width: 1100px) {
-  .scan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .table-wide { container-type: inline-size; }
 }
 
@@ -504,7 +500,6 @@ tbody tr:hover { background: var(--canvas); }
 
 @media (max-width: 700px) {
   .dashboard-grid { grid-template: "chart" "jobs" "sources" "http" "ports" "coverage" / minmax(0, 1fr); }
-  .scan-grid { grid-template-columns: minmax(0, 1fr); }
   .rule-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rule-editor .checkbox { justify-self: start; }
 
@@ -613,4 +608,56 @@ dialog .button-row { justify-content: flex-end; }
   .scope-note { flex-basis: 100%; }
   .scope-actions { width: 100%; }
   .scope-actions button { flex: 1; }
+}
+
+.scan-selector > h2 { font-size: 21px; }
+.scan-family { margin-top: 20px; padding: 15px; border: 1px solid var(--control); border-radius: var(--radius); }
+.scan-family > h2 { margin-bottom: 12px; font-size: 18px; }
+.scan-module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.scan-module { position: relative; min-width: 0; border: 1px solid var(--control); border-radius: 10px; background: var(--scan-surface); color: var(--ink); }
+.scan-tone-green { --scan-surface: #f3fced; }
+.scan-tone-yellow { --scan-surface: #fdf9ec; }
+.scan-tone-orange { --scan-surface: #fff0e6; }
+.scan-tone-blue { --scan-surface: #eaf6fe; }
+.scan-tone-purple { --scan-surface: #edecff; }
+.scan-tone-pink { --scan-surface: #ffe9ea; }
+.scan-tone-neutral { --scan-surface: #ece9eb; }
+:root[data-theme="black"] .scan-module { background: color-mix(in srgb, var(--scan-surface) 12%, var(--paper)); }
+.scan-module.is-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scan-module-tools { position: absolute; left: 8px; top: 7px; z-index: 1; display: flex; gap: 2px; }
+.scan-card-action { width: 26px; min-height: 26px; padding: 2px; border: none; background: transparent; color: var(--ink); }
+.scan-card-action .icon { width: 23px; height: 23px; stroke-width: 1.5; }
+.scan-module-choice { display: flex; flex-direction: column; justify-content: end; min-height: 160px; padding: 41px 11px 13px; cursor: pointer; }
+.scan-module-choice input[type="checkbox"] { position: absolute; top: 8px; right: 8px; appearance: none; width: 24px; height: 24px; min-height: 24px; margin: 0; padding: 0; border: 2px solid var(--control); border-radius: 50%; background: var(--paper); cursor: pointer; }
+.scan-module-choice input:checked { border: 7px solid var(--accent); }
+.scan-module-choice:has(input:disabled) { cursor: default; }
+.scan-module-choice input:disabled { cursor: not-allowed; background: var(--disabled-surface); }
+.scan-module-title { display: block; white-space: pre-line; max-width: 11ch; font-size: clamp(25px, 2.4vw, 35px); font-weight: 600; letter-spacing: -.035em; line-height: .98; overflow-wrap: normal; }
+.scan-module-mode { margin-top: 7px; font-size: 15px; font-weight: 500; }
+.scan-launch { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 20px; }
+.scan-launch .primary { min-height: 44px; padding: 10px 16px; font-size: 15px; }
+#scan-module-dialog { width: min(740px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); overflow-y: auto; }
+.scan-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.scan-dialog-heading button { min-width: 36px; min-height: 36px; font-size: 24px; line-height: 1; padding: 0; }
+#scan-dialog-content { display: grid; gap: 16px; }
+.scan-task-settings { min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--rule); border-radius: 9px; }
+.scan-task-settings legend { max-width: 100%; padding: 0 6px; }
+.scan-task-settings .checkbox { display: flex; align-items: center; gap: 8px; }
+.scan-task-settings input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; padding: 0; flex: none; }
+.scan-task-fields { display: grid; gap: 12px; margin: 9px 0; }
+.scan-task-settings .field-hint { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.scan-planned { padding-top: 12px; border-top: 1px solid var(--rule); }
+@media (max-width: 1100px) {
+  .scan-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+}
+@media (max-width: 520px) {
+  .scan-family { padding: 10px; }
+  .scan-module-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .scan-module-title { max-width: none; font-size: 30px; }
+  .scan-module-choice { min-height: 145px; padding-top: 51px; }
+  .scan-module-tools { top: 7px; left: 6px; }
+  .scan-card-action { width: 42px; min-height: 42px; }
+  .scan-module-choice input[type="checkbox"] { top: 13px; right: 12px; width: 30px; height: 30px; min-height: 30px; }
+  .scan-launch { align-items: stretch; flex-direction: column; }
+  .scan-task-settings { padding: 10px; }
 }

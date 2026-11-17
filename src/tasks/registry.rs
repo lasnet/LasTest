@@ -20,6 +20,7 @@ pub struct TaskTypeInfo {
 
 pub const TASK_NAMES: &[&str] = &[
     "subdomains.discover",
+    "subdomains.subfinder",
     "dns.records",
     "dns.wordlist",
     "reverse.ip",
@@ -40,6 +41,29 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
     let nmap_available = nmap_available(config);
     let censys_configured = config.censys_api_id.is_some() && config.censys_api_secret.is_some();
     let mut items = vec![
+        TaskTypeInfo {
+            name: "subdomains.subfinder",
+            title: "Subfinder passive discovery and DNS resolution",
+            category: "recon",
+            result_format_version: "1",
+            available: crate::tasks::subfinder::available(config),
+            unavailable_reason: (!crate::tasks::subfinder::available(config)).then(|| {
+                "Subfinder is not installed or LASTEST_SUBFINDER_PATH is not configured".into()
+            }),
+            requires_explicit_scope: "domain",
+            params_schema: json!({"type":"object","properties":{
+                "domains":{"type":"array","items":{"type":"string"}},
+                "sources":{"type":"array","items":{"type":"string"}},
+                "resolve":{"type":"boolean"}
+            },"additionalProperties":false}),
+            limits: json!({"max_domains":50,"timeout_seconds":config.subfinder_timeout_seconds,"max_output_bytes":config.max_artifact_bytes}),
+            inputs: vec!["approved DNS scope or explicit domains"],
+            outputs: vec![
+                "host observations",
+                "DNS and IP observations",
+                "subdomains artifact",
+            ],
+        },
         TaskTypeInfo {
             name: "subdomains.discover",
             title: "Passive subdomain discovery (Certificate Transparency)",

@@ -436,3 +436,130 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
     assert!(!outcome.errors.is_empty());
     assert_eq!(outcome.result["sources"][0]["status"], "error");
 }
+
+#[tokio::test]
+async fn subfinder_adapter_bounds_output_and_resolves_only_allowed_hosts() {
+    let env = TestEnv::new();
+    let temp = tempfile::TempDir::new().unwrap();
+    let script = temp.path().join("subfinder");
+    let args_file = temp.path().join("args");
+    std::fs::write(&script, format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' api.allowed.test api.allowed.test denied.allowed.test outside.test invalid/name\n",
+        args_file.display()
+    )).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dns = spawn_dns_server(|name, qtype| {
+        if name == "api.allowed.test" && qtype == 1 {
+            vec![vec![203, 0, 113, 10]]
+        } else {
+            vec![]
+        }
+    })
+    .await;
+    let scope = Scope::new(vec![
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::SubdomainTree,
+            "allowed.test",
+            false,
+        )
+        .unwrap(),
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::ExactDomain,
+            "denied.allowed.test",
+            true,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let mut ctx = task_context(&env, scope, "subfinder-test");
+    ctx.config.subfinder_path = Some(script.clone());
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    let job = make_job(
+        "subdomains.subfinder",
+        json!({"domains":["allowed.test"],"sources":["crtsh"]}),
+    );
+    let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 2);
+    assert!(outcome
+        .observations
+        .iter()
+        .any(|item| item.asset == "203.0.113.10"));
+    assert!(outcome
+        .observations
+        .iter()
+        .any(|item| item.asset == "denied.allowed.test" && item.scope_status == "denied"));
+    assert!(!outcome
+        .observations
+        .iter()
+        .any(|item| item.asset == "outside.test"));
+    assert!(!dns
+        .queries
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == "denied.allowed.test"));
+    let args = std::fs::read_to_string(args_file).unwrap();
+    assert!(args.contains("-duc"));
+    assert!(args.contains("-s\ncrtsh"));
+    assert!(!args.contains("-active"));
+    assert_eq!(outcome.artifacts.len(), 1);
+    assert!(!ctx
+        .config
+        .tmp_dir()
+        .join(format!("subfinder-{}", job.id))
+        .exists());
+
+    assert!(
+        lastest::tasks::subfinder::validate(&json!({"sources":["-all"]}), &ctx.config).is_err()
+    );
+    let outside = make_job("subdomains.subfinder", json!({"domains":["outside.test"]}));
+    assert!(lastest::tasks::subfinder::run(&outside, &ctx)
+        .await
+        .is_err());
+
+    ctx.config.max_artifact_bytes = 8;
+    let error = lastest::tasks::subfinder::run(&job, &ctx)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("limit"));
+    ctx.config.subfinder_path = None;
+    assert!(lastest::tasks::subfinder::validate(&json!({}), &ctx.config).is_err());
+}
+
+#[tokio::test]
+async fn subfinder_adapter_stops_on_timeout_and_cancellation() {
+    let env = TestEnv::new();
+    let temp = tempfile::TempDir::new().unwrap();
+    let script = temp.path().join("subfinder");
+    std::fs::write(&script, "#!/bin/sh\nexec sleep 10\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let scope = Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap();
+    let mut ctx = task_context(&env, scope, "subfinder-timeout");
+    ctx.config.subfinder_path = Some(script);
+    ctx.config.subfinder_timeout_seconds = 1;
+    let job = make_job(
+        "subdomains.subfinder",
+        json!({"domains":["allowed.test"],"resolve":false}),
+    );
+    let error = lastest::tasks::subfinder::run(&job, &ctx)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("timeout"));
+    ctx.config.subfinder_timeout_seconds = 30;
+    let cancel = ctx.cancel.clone();
+    let cancel_task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        lastest::tasks::subfinder::run(&job, &ctx),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(error
+        .downcast_ref::<lastest::tasks::TaskCancelled>()
+        .is_some());
+    cancel_task.await.unwrap();
+}

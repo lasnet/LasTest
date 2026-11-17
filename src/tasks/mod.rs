@@ -7,6 +7,7 @@ pub mod nmap;
 pub mod passive;
 pub mod provider;
 pub mod registry;
+pub mod subfinder;
 pub mod web_checks;
 
 use crate::config::Config;
@@ -282,6 +283,7 @@ pub async fn execute(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         "dns.wordlist" => dns_tasks::run_wordlist(job, ctx).await,
         "reverse.ip" => dns_tasks::run_reverse_ip(job, ctx).await,
         "subdomains.discover" => passive::run_subdomains(job, ctx).await,
+        "subdomains.subfinder" => subfinder::run(job, ctx).await,
         "urls.passive" => passive::run_urls_passive(job, ctx).await,
         "http.crawl" => http_tasks::run_crawl(job, ctx).await,
         "paths.discover" => http_tasks::run_paths(job, ctx).await,
@@ -351,6 +353,7 @@ fn string_list(params: &Value, key: &str) -> Result<Vec<String>> {
 /// Validation performed at submission time, before a job enters the queue.
 pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> Result<()> {
     match task_type {
+        "subdomains.subfinder" => subfinder::validate(params, config)?,
         "subdomains.discover" => {
             ensure_keys(params, &["domains", "providers"])?;
             for provider in string_list(params, "providers")? {

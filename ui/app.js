@@ -186,6 +186,10 @@
 
   function showApp() {
     $("#loading-view").hidden = true;
+    selectedModules.clear();
+    scanChoices.clear();
+    scanParams.clear();
+    submissionKeys.clear();
     state.projectId = "";
     state.project = null;
     state.dashboard = null;
@@ -204,8 +208,7 @@
     $$("[data-admin-only]").forEach((node) => { node.hidden = !admin; });
     const analyst = admin || state.me.role === "analyst";
     $("#new-project-button").hidden = !analyst;
-    $("#submit-job-button").disabled = !analyst;
-    $("#submit-chain-button").disabled = !analyst;
+    $("#start-scanning-button").disabled = true;
     $("#save-approve-scope-button").disabled = !analyst;
     $("#add-rule-button").disabled = !analyst;
   }
@@ -285,37 +288,13 @@
     try {
       const value = await api("/api/task-types");
       state.taskTypes = value.task_types || [];
-      const select = $("#task-type");
-      clear(select);
-      for (const item of state.taskTypes) {
-        const option = new Option(`${item.name} — ${item.title}${item.available ? "" : " (unavailable)"}`, item.name);
-        select.appendChild(option);
-      }
-      const chain = new Option("chain.all_in_one — preset chain", "chain.all_in_one");
-      select.appendChild(chain);
-      renderTaskAvailability();
-    } catch (error) {
-      notice(error.message, "error");
-    }
-  }
-
-  function renderTaskAvailability() {
-    const name = $("#task-type").value;
-    const info = state.taskTypes.find((item) => item.name === name);
-    const node = $("#task-availability");
-    if (!info) {
-      node.textContent = name === "chain.all_in_one"
-        ? "Creates linked subdomain, DNS, HTTP, URL, crawl and web-check stage jobs."
-        : "";
-      return;
-    }
-    node.textContent = info.available
-      ? `${info.title}. Inputs: ${(info.inputs || []).join("; ")}`
-      : `Unavailable: ${info.unavailable_reason}`;
+      renderScanModules();
+    } catch (error) { notice(error.message, "error"); }
   }
 
   async function selectProject(id) {
     state.projectId = id;
+    scanParams.clear();
     rememberProject();
     state.project = state.projects.find((item) => item.project.id === id)?.project || null;
     state.dashboard = null;
@@ -367,6 +346,7 @@
   function render() {
     renderScope();
     renderJobs();
+    renderScanModules();
     renderDashboard();
     renderFindings();
     renderAssets();
@@ -377,7 +357,7 @@
     if (!state.projectId) return;
     try {
       if (["dashboard", "assets", "findings"].includes(state.view)) await loadDashboard();
-      if (state.view === "scans") await loadJobs();
+      if (state.view === "scans") await Promise.all([loadJobs(), loadScope()]);
       if (state.view === "scope") await loadScope();
       if (state.view === "users") await loadAdmin();
     } catch (error) {
@@ -481,6 +461,7 @@
       recordsObserver.observe(recordTable);
     }
     updateScopeControls();
+    updateScanLaunch();
 
     const history = $("#scope-history");
     clear(history);
@@ -1028,51 +1009,279 @@
   $("#save-approve-scope-button").addEventListener("click", saveScope);
   updateRecordHint();
 
-  $("#task-type").addEventListener("change", renderTaskAvailability);
+  const scanModules = [
+    { id: "subdomains", title: "Subdomain Enumeration", family: "recon", mode: "Passive Recon", tone: "green",
+      tasks: ["subdomains.subfinder", "subdomains.discover", "dns.records", "dns.wordlist"],
+      description: "Find subdomains through passive sources and resolve their IP addresses. Subfinder uses public providers. DNS resolution runs only for hosts allowed by the approved scope. A domain entry alone authorizes that exact name; discovered names remain marked outside scope until explicitly approved.",
+      planned: "Subfinder, subdomain-only ffuf, and an optimized dnsmap wordlist with eight workers." },
+    { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
+      tasks: ["reverse.ip"],
+      description: "Discover IP-related assets using PTR and configured passive reverse-IP providers. Explicit approved IP addresses are required.",
+      planned: "hakrevdns, theHarvester and WhatWeb. ASN and cloud-storage discovery are planned." },
+    { id: "crawling", title: "Web Crawling", family: "recon", mode: "Active Recon", tone: "orange",
+      tasks: ["urls.passive", "http.crawl", "paths.discover"],
+      description: "Collect URLs from public archives, crawl HTML links, or discover paths using the current bounded Rust modules. Archive collection is passive; crawling and path discovery send requests to approved targets.",
+      planned: "gau, waybackurls and Katana, including a future JavaScript-rendering option." },
+    { id: "http", title: "HTTP Probing", family: "recon", mode: "Active Recon", tone: "blue",
+      tasks: ["http.probe"],
+      description: "Check approved domains or URLs for HTTP reachability, status codes, response headers and technology hints. Requests and redirects follow the current scope and network policy.",
+      planned: "httpx integration." },
+    { id: "ports", title: "Port Scanning", family: "recon", mode: "Active Recon", tone: "purple",
+      tasks: ["tcp.connect", "nmap.profile"],
+      description: "Check explicit approved IP addresses with native TCP connect or the optional fixed unprivileged Nmap service profile. Select the ports in settings. Nmap is available when installed and configured.",
+      planned: "Nmap presets for web ports, the 1,000 most common ports, and OS/service information after discovering open ports." },
+    { id: "network-vulnerabilities", title: "Network Vulnerability", family: "vulnerability", mode: "Active checks", tone: "pink", tasks: [],
+      description: "Network vulnerability integrations are planned. This card will become selectable when an executable task is available.",
+      planned: "sqlmap, Nmap vulnerability scripts and Nuclei. The sqlmap placement is retained from the product plan; its target remains a web application." },
+    { id: "web-vulnerabilities", title: "WEB Vulnerability", family: "vulnerability", mode: "Active checks", tone: "neutral",
+      tasks: ["web.checks"],
+      description: "Run the implemented versioned HTTP/TLS checks for HSTS, certificate expiry and Secure cookies. The current checks are native Rust implementations.",
+      planned: "Nmap web-vulnerability scripts, Nikto and Nuclei." },
+  ];
+  const selectedModules = new Set();
+  const scanChoices = new Map();
+  const scanParams = new Map();
+  const submissionKeys = new Map();
+  let scanning = false;
+  let settingsModule = null;
 
-  $("#submit-job-button").addEventListener("click", async () => {
-    if (!requireProject()) return;
-    $("#scan-error").textContent = "";
-    let params;
-    try { params = JSON.parse($("#task-params").value || "{}"); }
-    catch (err) { $("#scan-error").textContent = `Parameters must be valid JSON: ${err.message}`; return; }
-    try {
-      await api(`/api/projects/${encodeURIComponent(state.projectId)}/jobs`, {
-        method: "POST",
-        body: {
-          task_type: $("#task-type").value,
-          params,
-          idempotency_key: $("#idempotency-key").value || null,
-        },
-      });
-      $("#idempotency-key").value = "";
-      await loadJobs();
-      notice("Job submitted.", "info");
-    } catch (error) {
-      $("#scan-error").textContent = error.message;
+  function moduleTasks(module) {
+    return module.tasks.map((name) => state.taskTypes.find((task) => task.name === name)).filter(Boolean);
+  }
+
+  function svgIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS(svg.namespaceURI, "use");
+    use.setAttribute("href", `#icon-${name}`);
+    svg.appendChild(use);
+    return svg;
+  }
+
+  function renderScanModules() {
+    for (const module of scanModules) {
+      const available = moduleTasks(module).filter((task) => task.available);
+      if (!scanChoices.has(module.id)) scanChoices.set(module.id, new Set(available.slice(0, 1).map((task) => task.name)));
     }
+    for (const family of ["recon", "vulnerability"]) {
+      const container = $(`#${family}-modules`);
+      clear(container);
+      for (const module of scanModules.filter((item) => item.family === family)) {
+        const available = moduleTasks(module).some((task) => task.available);
+        const card = el("article", null, `scan-module scan-tone-${module.tone}`);
+        card.classList.toggle("is-selected", selectedModules.has(module.id));
+        const tools = el("div", null, "scan-module-tools");
+        for (const [icon, action, label] of [["info", "info", "Information"], ["settings", "settings", "Settings"]]) {
+          const button = el("button", null, "scan-card-action");
+          button.type = "button";
+          button.setAttribute("aria-label", `${label} for ${module.title}`);
+          button.appendChild(svgIcon(icon));
+          button.addEventListener("click", () => openScanDialog(module, action));
+          tools.appendChild(button);
+        }
+        const label = el("label", null, "scan-module-choice");
+        const checkbox = el("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selectedModules.has(module.id);
+        checkbox.disabled = !available || scanning || state.me?.role === "viewer";
+        checkbox.setAttribute("aria-label", `Select ${module.title}`);
+        const title = el("span", module.title.replace(" ", "\n"), "scan-module-title");
+        const mode = el("span", available ? module.mode : "Not available yet", "scan-module-mode");
+        append(label, checkbox, title, mode);
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selectedModules.add(module.id);
+          else selectedModules.delete(module.id);
+          card.classList.toggle("is-selected", checkbox.checked);
+          updateScanLaunch();
+        });
+        append(card, tools, label);
+        container.appendChild(card);
+      }
+    }
+    updateScanLaunch();
+  }
+
+  function updateScanLaunch() {
+    const ready = state.scope?.status === "approved";
+    $("#start-scanning-button").disabled = scanning || !state.projectId || !ready || !selectedModules.size || state.me?.role === "viewer";
+    $("#start-scanning-button").textContent = scanning ? "Submitting…" : "Start scanning";
+    $("#scan-selection-status").textContent = !state.projectId ? "Select a project to start scanning."
+      : !state.scope ? "Loading project scope…"
+      : !ready ? "Approve the project scope before starting."
+      : selectedModules.size ? `${selectedModules.size} techniques selected` : "Select one or more techniques.";
+  }
+
+  const scanFieldLabels = {
+    domains: "Domains", targets: "Targets", domain: "Domain", ips: "IP addresses",
+    sources: "Sources", resolve: "Resolve IP addresses", providers: "Providers",
+    record_types: "DNS record types", words: "Wordlist", mode: "Scan mode", seeds: "Starting URLs",
+    base_urls: "Base URLs", ports: "TCP ports", max_pages: "Maximum pages",
+    max_depth: "Maximum depth", proxy_profile: "SOCKS5 profile", cookie_names: "Session cookie names", limit: "Maximum URLs",
+  };
+
+  function defaultScanParams(task) {
+    const params = { ...(scanParams.get(task.name) || {}) };
+    if (task.params_schema.required?.includes("ips") && !params.ips) {
+      params.ips = (state.scope?.rules || []).filter((rule) => rule.kind === "ip" && !rule.exclusion).map((rule) => rule.value);
+    }
+    if (task.params_schema.required?.includes("domain") && !params.domain) {
+      params.domain = (state.scope?.rules || []).find((rule) => !rule.exclusion && ["exact_domain", "subdomain_tree"].includes(rule.kind))?.value || "";
+    }
+    return params;
+  }
+
+  function openScanDialog(module, action) {
+    settingsModule = action === "settings" ? module : null;
+    $("#scan-dialog-title").textContent = `${module.title} · ${action === "settings" ? "Settings" : "Information"}`;
+    $("#scan-settings-error").textContent = "";
+    const content = $("#scan-dialog-content");
+    content.replaceChildren(el("p", module.description, "muted"));
+    $("#apply-scan-settings").hidden = action !== "settings";
+    if (action === "info") {
+      content.appendChild(el("p", `Planned tools · ${module.planned}`, "scan-planned"));
+    } else {
+      const tasks = moduleTasks(module);
+      if (!tasks.length) content.appendChild(el("p", "No implemented tasks are available for this module yet.", "empty"));
+      for (const task of tasks) {
+        const section = el("fieldset", null, "scan-task-settings");
+        const legend = el("legend");
+        const choiceLabel = el("label", null, "checkbox");
+        const choice = el("input");
+        choice.type = "checkbox";
+        choice.dataset.scanTask = task.name;
+        choice.checked = scanChoices.get(module.id)?.has(task.name) || false;
+        choice.disabled = !task.available || scanning || state.me?.role === "viewer";
+        append(choiceLabel, choice, el("span", task.title));
+        legend.appendChild(choiceLabel);
+        section.appendChild(legend);
+        if (task.unavailable_reason) section.appendChild(el("p", task.unavailable_reason, "muted"));
+        const fields = el("div", null, "scan-task-fields");
+        fields.hidden = !choice.checked || !task.available;
+        choice.addEventListener("change", () => { fields.hidden = !choice.checked; });
+        const params = defaultScanParams(task);
+        for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
+          const field = el("div", null, "field");
+          const id = `scan-setting-${task.name.replaceAll(".", "-")}-${key}`;
+          const label = el("label", scanFieldLabels[key] || key);
+          label.htmlFor = id;
+          let input;
+          if (property.enum) {
+            input = el("select");
+            for (const option of property.enum) input.appendChild(new Option(option, option));
+            input.value = params[key] ?? property.enum[0];
+          } else {
+            input = el(property.type === "array" && property.items?.type !== "integer" ? "textarea" : "input");
+            if (property.type === "boolean") {
+              input.type = "checkbox";
+              input.checked = params[key] ?? key === "resolve";
+            } else {
+              if (property.type === "integer") { input.type = "number"; input.min = property.minimum ?? 0; }
+              input.value = Array.isArray(params[key]) ? params[key].join(input.tagName === "TEXTAREA" ? "\n" : ", ") : params[key] ?? "";
+              if (input.tagName === "TEXTAREA") input.rows = 2;
+              input.placeholder = task.params_schema.required?.includes(key) ? "Required" : "Use task defaults";
+            }
+          }
+          input.id = id;
+          input.dataset.scanParam = key;
+          input.dataset.task = task.name;
+          input.disabled = scanning || state.me?.role === "viewer";
+          append(field, label, input);
+          if (property.type === "array") {
+            field.appendChild(el("p", property.items?.enum ? `Options: ${property.items.enum.join(", ")}. One per line or separated by commas.`
+              : "One per line or separated by commas.", "muted field-hint"));
+          }
+          fields.appendChild(field);
+        }
+        append(section, fields, el("p", `Limits · ${Object.entries(task.limits).map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`).join(" · ")}`, "muted field-hint"));
+        content.appendChild(section);
+      }
+    }
+    $("#apply-scan-settings").disabled = scanning || state.me?.role === "viewer" || !moduleTasks(module).some((task) => task.available);
+    $("#scan-module-dialog").showModal();
+  }
+
+  function readTaskParams(task) {
+    const params = {};
+    for (const input of $$("#scan-dialog-content [data-scan-param]").filter((node) => node.dataset.task === task.name)) {
+      const key = input.dataset.scanParam;
+      const schema = task.params_schema.properties[key];
+      if (schema.type === "boolean") { params[key] = input.checked; continue; }
+      if (!input.value.trim()) {
+        if (task.params_schema.required?.includes(key)) throw new Error(`${scanFieldLabels[key] || key} is required.`);
+        continue;
+      }
+      if (schema.type === "array") {
+        const values = input.value.split(/[,\n]+/).map((value) => value.trim()).filter(Boolean);
+        params[key] = schema.items?.type === "integer" ? values.map(Number) : values;
+        if (schema.items?.enum && values.some((value) => !schema.items.enum.includes(value))) throw new Error(`Choose valid ${key} from the listed options.`);
+        if (schema.items?.type === "integer" && params[key].some((value) => !Number.isInteger(value) || value < 1 || value > 65535)) throw new Error("Enter valid TCP ports from 1 to 65535.");
+      } else if (schema.type === "integer") {
+        params[key] = Number(input.value);
+        if (!Number.isInteger(params[key]) || params[key] < (schema.minimum ?? 0) || (schema.maximum && params[key] > schema.maximum)) throw new Error(`Invalid ${scanFieldLabels[key] || key}.`);
+      } else params[key] = input.value.trim();
+    }
+    return params;
+  }
+
+  $("#close-scan-dialog").addEventListener("click", () => $("#scan-module-dialog").close());
+  $("#scan-settings-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const choices = new Set();
+      const updates = new Map();
+      for (const task of moduleTasks(settingsModule).filter((task) => task.available)) {
+        const choice = $$("#scan-dialog-content [data-scan-task]").find((node) => node.dataset.scanTask === task.name);
+        if (choice.checked) { choices.add(task.name); updates.set(task.name, readTaskParams(task)); }
+      }
+      if (!choices.size) throw new Error("Select at least one available task.");
+      scanChoices.set(settingsModule.id, choices);
+      for (const [name, params] of updates) scanParams.set(name, params);
+      $("#scan-module-dialog").close();
+      renderScanModules();
+    } catch (error) { $("#scan-settings-error").textContent = error.message; }
   });
 
-  $("#submit-chain-button").addEventListener("click", async () => {
-    if (!requireProject()) return;
+  $("#start-scanning-button").addEventListener("click", async () => {
+    if (scanning || !requireProject() || state.me?.role === "viewer" || state.scope?.status !== "approved") return;
+    const projectId = state.projectId;
+    const tasks = new Map();
+    for (const module of scanModules.filter((item) => selectedModules.has(item.id))) {
+      for (const task of moduleTasks(module).filter((item) => item.available && scanChoices.get(module.id)?.has(item.name))) {
+        const params = defaultScanParams(task);
+        const missing = (task.params_schema.required || []).find((key) => !params[key] || (Array.isArray(params[key]) && !params[key].length));
+        if (missing) {
+          openScanDialog(module, "settings");
+          $("#scan-settings-error").textContent = `Configure ${scanFieldLabels[missing] || missing} before starting.`;
+          return;
+        }
+        tasks.set(task.name, params);
+      }
+    }
+    if (!tasks.size) return;
+    scanning = true;
+    renderScanModules();
     $("#scan-error").textContent = "";
-    let params = {};
-    try { params = JSON.parse($("#task-params").value || "{}"); }
-    catch (err) { $("#scan-error").textContent = `Parameters must be valid JSON: ${err.message}`; return; }
+    let submitted = 0;
     try {
-      await api(`/api/projects/${encodeURIComponent(state.projectId)}/chains`, {
-        method: "POST",
-        body: {
-          domains: params.domains || [],
-          targets: params.targets || [],
-          idempotency_key: $("#idempotency-key").value || null,
-        },
-      });
-      $("#idempotency-key").value = "";
-      await loadJobs();
-      notice("Chain submitted.", "info");
+      for (const [task_type, params] of tasks) {
+        const fingerprint = JSON.stringify({ projectId, task_type, params });
+        if (!submissionKeys.has(fingerprint)) submissionKeys.set(fingerprint, crypto.randomUUID());
+        await api(`/api/projects/${encodeURIComponent(projectId)}/jobs`, {
+          method: "POST", body: { task_type, params, idempotency_key: submissionKeys.get(fingerprint) },
+        });
+        submitted += 1;
+      }
+      submissionKeys.clear();
+      notice(`${submitted} scanning jobs submitted.`, "success");
     } catch (error) {
-      $("#scan-error").textContent = error.message;
+      $("#scan-error").textContent = `${submitted} jobs submitted. ${error.message} Retry to continue without duplicating submitted jobs.`;
+    } finally {
+      scanning = false;
+      renderScanModules();
+      if (state.projectId === projectId) {
+        try { await loadJobs(); } catch (error) { notice(error.message, "error"); }
+      }
     }
   });
 
