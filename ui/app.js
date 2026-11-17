@@ -10,6 +10,7 @@
     scope: null,
     scopeHistory: [],
     rules: [],
+    scopeSaving: false,
     taskTypes: [],
     jobs: [],
     view: "dashboard",
@@ -70,7 +71,7 @@
     return time;
   }
 
-  function table(columns, rows, cellValue) {
+  function table(columns, rows, cellValue, rowClass) {
     if (!rows || rows.length === 0) {
       return el("p", "No data for this view.", "empty");
     }
@@ -95,7 +96,7 @@
       for (const heading of headerRow.children) heading.setAttribute("role", "columnheader");
     }
     for (const row of rows) {
-      const tr = el("tr");
+      const tr = el("tr", null, rowClass ? rowClass(row) : "");
       if (compactRows) tr.setAttribute("role", "row");
       for (const column of columns) {
         const td = el("td");
@@ -190,7 +191,7 @@
     $("#submit-chain-button").disabled = !analyst;
     $("#save-scope-button").disabled = !analyst;
     $("#save-approve-scope-button").disabled = !analyst;
-    $("#approve-scope-button").disabled = !analyst;
+    $("#add-rule-button").disabled = !analyst;
   }
 
   async function boot() {
@@ -282,6 +283,9 @@
     state.dashboard = null;
     state.scope = null;
     state.rules = [];
+    $("#scope-note").value = "";
+    $("#scope-search").value = "";
+    $("#scope-error").textContent = "";
     renderProjectCaption();
     notice("");
     if (!id) {
@@ -353,13 +357,47 @@
   }
 
   async function loadScope() {
-    if (!requireProject()) return;
-    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope`);
-    state.scope = value.scope;
+    if (!requireProject() || scopeHasChanges() || state.scopeSaving) return;
+    const projectId = state.projectId;
+    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/scope`);
+    if (state.projectId !== projectId || scopeHasChanges() || state.scopeSaving) return;
+    if (state.scope && value.scope.version < state.scope.version) return;
+    applyScope(value.scope);
     state.scopeHistory = value.history || [];
-    state.rules = (value.scope.rules || []).map((rule) => ({ ...rule }));
     renderScope();
   }
+
+  function applyScope(scope) {
+    state.scope = scope;
+    state.rules = (scope.rules || []).map((rule) => ({ ...rule }));
+  }
+
+  function scopeChanges() {
+    const saved = state.scope?.rules || [];
+    return {
+      added: state.rules.filter((rule) => !saved.some((item) => sameRule(item, rule))).length,
+      removed: saved.filter((rule) => !state.rules.some((item) => sameRule(item, rule))).length,
+    };
+  }
+
+  function sameRule(left, right) {
+    return left.kind === right.kind && left.value === right.value && Boolean(left.exclusion) === Boolean(right.exclusion);
+  }
+
+  function scopeHasChanges() {
+    const { added, removed } = scopeChanges();
+    return added > 0 || removed > 0 || Boolean($("#scope-note").value.trim());
+  }
+
+  const scopeTypes = { exact_domain: "DNS Name", subdomain_tree: "DNS Name (including subdomains)", ip: "IP address", cidr: "Network" };
+  const recordsObserver = new ResizeObserver(() => {
+    const wrapper = $("#scope-rules .table-wrap");
+    if (!wrapper) return;
+    const rows = Array.from(wrapper.querySelectorAll("tbody tr")).slice(0, 5);
+    const heading = wrapper.querySelector("thead");
+    const headerHeight = getComputedStyle(heading).position === "absolute" ? 0 : heading.getBoundingClientRect().height;
+    wrapper.style.maxHeight = `${headerHeight + rows.reduce((height, row) => height + row.getBoundingClientRect().height, 0) + 2}px`;
+  });
 
   async function loadJobs() {
     if (!requireProject()) return;
@@ -369,47 +407,40 @@
   }
 
   function renderScope() {
-    const status = $("#scope-status");
-    clear(status);
-    if (!state.projectId) {
-      status.appendChild(el("p", "Select a project to view its scope.", "empty"));
-    } else if (!state.scope) {
-      status.appendChild(el("p", "Loading scope…", "muted"));
-    } else {
-      const approved = state.scope.status === "approved";
-      status.appendChild(el("h2", `Revision ${state.scope.version}`));
-      const line = el("p", null, "scope-meta");
-      append(line,
-        el("span", `Status: ${state.scope.status}`, approved ? "badge ok" : "badge warn"),
-        el("span", ` Rules: ${state.rules.length}`, "badge"),
-        el("span", ` Created: ${state.scope.created_at}`, "muted"));
-      status.appendChild(line);
-      if (!approved) {
-        status.appendChild(el("p", "Scans are blocked until this revision is approved. Imported scope stays pending review and never authorizes traffic automatically.", "warn-text"));
-      }
-    }
-
+    recordsObserver.disconnect();
     const rules = $("#scope-rules");
     clear(rules);
+    const query = $("#scope-search").value.trim().toLocaleLowerCase();
+    const filtered = state.rules.filter((rule) =>
+      [scopeTypes[rule.kind], rule.value, rule.exclusion ? "exclude" : "allow"]
+        .some((value) => value.toLocaleLowerCase().includes(query)));
     if (!state.projectId) {
-      rules.appendChild(el("p", "No project selected.", "empty"));
-    } else if (state.rules.length === 0) {
-      rules.appendChild(el("p", "No scope rules. Add an allowed rule before approving.", "empty"));
+      rules.appendChild(el("p", "Select a project to view its records.", "empty"));
+    } else if (!state.scope) {
+      rules.appendChild(el("p", "Loading records…", "muted"));
+    } else if (!filtered.length) {
+      rules.appendChild(el("p", query ? "No matching records." : "No records. Add an allowed record to get started.", "empty"));
     } else {
-      rules.appendChild(table(["Kind", "Value", "Effect", ""], state.rules, (rule, column) => {
-        if (column === "Effect") return rule.exclusion ? "exclude" : "allow";
-        if (column === "") {
-          const button = el("button", "Remove", "link");
-          button.type = "button";
-          button.addEventListener("click", () => {
-            state.rules = state.rules.filter((item) => item !== rule);
-            renderScope();
-          });
-          return button;
-        }
-        return rule[column.toLowerCase()] ?? "";
-      }));
+      rules.appendChild(table(["Type", "Value", "Effect", ""], filtered, (rule, column) => {
+        if (column === "Type") return scopeTypes[rule.kind];
+        if (column === "Value") return rule.value;
+        if (column === "Effect") return el("span", rule.exclusion ? "exclude" : "allow", rule.exclusion ? "badge bad" : "badge ok");
+        const button = el("button", "Remove", "link");
+        button.type = "button";
+        button.disabled = state.scopeSaving || state.me?.role === "viewer";
+        button.addEventListener("click", () => {
+          state.rules = state.rules.filter((item) => item !== rule);
+          renderScope();
+        });
+        return button;
+      }, (rule) => (state.scope.rules || []).some((saved) => sameRule(saved, rule)) ? "" : "record-pending"));
     }
+    const recordTable = rules.querySelector("table");
+    if (recordTable) {
+      rules.querySelector(".table-wrap").tabIndex = 0;
+      recordsObserver.observe(recordTable);
+    }
+    updateScopeControls();
 
     const history = $("#scope-history");
     clear(history);
@@ -833,56 +864,128 @@
 
   $("#refresh-button").addEventListener("click", refreshCurrent);
 
+  function updateScopeControls() {
+    const editable = Boolean(state.scope) && state.me?.role !== "viewer" && !state.scopeSaving;
+    for (const id of ["rule-kind", "rule-value", "rule-exclusion", "add-rule-button", "scope-note", "save-scope-button", "save-approve-scope-button"]) {
+      $(`#${id}`).disabled = !editable;
+    }
+    $("#cancel-scope-button").disabled = !editable || !scopeHasChanges();
+    $("#project-select").disabled = state.scopeSaving;
+  }
+
+  function updateRecordHint() {
+    const hints = {
+      exact_domain: ["example.com", "DNS name, for example example.com."],
+      ip: ["203.0.113.10", "IPv4 or IPv6 address, for example 203.0.113.10 or 2001:db8::1."],
+      cidr: ["203.0.113.0/24", "Network with prefix length, for example 203.0.113.0/24 or 2001:db8::/32."],
+    };
+    const [placeholder, hint] = hints[$("#rule-kind").value];
+    $("#rule-value").placeholder = placeholder;
+    $("#rule-value-hint").textContent = hint;
+    $("#rule-value").setCustomValidity("");
+  }
+
+  function normalizedRecordValue(kind, value) {
+    if (kind !== "exact_domain") return value;
+    let hostname;
+    if (/[/\\:@?#%\s]/u.test(value) || value.startsWith("*.")) {
+      throw new Error("Enter a DNS name such as example.com, without a URL or wildcard.");
+    }
+    try { hostname = new URL(`https://${value}`).hostname.replace(/\.$/, ""); }
+    catch { throw new Error("Enter a valid DNS name such as example.com."); }
+    const labels = hostname.split(".");
+    if (hostname.length > 253 || !labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
+      || (hostname !== "localhost" && (labels.length < 2 || /^\d+$/.test(labels.at(-1))))) {
+      throw new Error("Enter a complete DNS name such as example.com.");
+    }
+    return hostname;
+  }
+
+  $("#rule-kind").addEventListener("change", updateRecordHint);
+  $("#rule-value").addEventListener("input", () => $("#rule-value").setCustomValidity(""));
+  $("#scope-search").addEventListener("input", renderScope);
+  $("#scope-note").addEventListener("input", updateScopeControls);
   $("#add-rule-button").addEventListener("click", () => {
-    const value = $("#rule-value").value.trim();
-    if (!value) { $("#scope-error").textContent = "Enter a rule value."; return; }
-    state.rules.push({
-      kind: $("#rule-kind").value,
-      value,
-      exclusion: $("#rule-exclusion").checked,
-      verified: true,
-    });
+    if (!state.scope || state.scopeSaving || state.me?.role === "viewer") return;
+    const input = $("#rule-value");
+    try {
+      const value = input.value.trim();
+      if (!value) throw new Error("Enter a record value.");
+      const rule = {
+        kind: $("#rule-kind").value,
+        value: normalizedRecordValue($("#rule-kind").value, value),
+        exclusion: $("#rule-exclusion").checked,
+        verified: true,
+      };
+      if (state.rules.some((item) => sameRule(item, rule))) throw new Error("This record is already in the list.");
+      state.rules.push(rule);
+      input.value = "";
+      $("#rule-exclusion").checked = false;
+      $("#scope-search").value = "";
+      $("#scope-error").textContent = "";
+      renderScope();
+      const scroller = $("#scope-rules .table-wrap");
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    } catch (error) {
+      $("#scope-error").textContent = error.message;
+      input.setCustomValidity(error.message);
+      input.reportValidity();
+    }
+  });
+
+  const cancelDialog = $("#cancel-scope-dialog");
+  $("#cancel-scope-button").addEventListener("click", () => {
+    const { added, removed } = scopeChanges();
+    const note = $("#scope-note").value.trim() ? " The revision note will also be discarded." : "";
+    $("#cancel-scope-description").textContent =
+      `Discard ${added + removed} record changes? This will undo the additions (${added}) and removals (${removed}).${note}`;
+    cancelDialog.showModal();
+  });
+  cancelDialog.addEventListener("close", () => {
+    if (cancelDialog.returnValue !== "discard") return;
+    applyScope(state.scope);
+    $("#scope-note").value = "";
     $("#rule-value").value = "";
     $("#rule-exclusion").checked = false;
+    $("#scope-search").value = "";
     $("#scope-error").textContent = "";
+    $("#rule-value").setCustomValidity("");
     renderScope();
   });
 
+  let scopeToastTimer;
   async function saveScope(approve) {
-    if (!requireProject()) return;
+    if (!state.scope || state.scopeSaving || !requireProject()) return;
+    const projectId = state.projectId;
+    const rules = state.rules.map(({ kind, value, exclusion, verified }) => ({ kind, value, exclusion, verified }));
+    state.scopeSaving = true;
+    renderScope();
     $("#scope-error").textContent = "";
     try {
-      await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope`, {
+      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/scope`, {
         method: "PUT",
-        body: {
-          rules: state.rules,
-          expected_version: state.scope?.version,
-          note: $("#scope-note").value,
-          approve,
-        },
+        body: { rules, expected_version: state.scope.version, note: $("#scope-note").value, approve },
       });
+      if (state.projectId !== projectId) return;
+      applyScope(value.scope);
       $("#scope-note").value = "";
-      await loadScope();
+      clearTimeout(scopeToastTimer);
+      $("#scope-toast").hidden = false;
+      scopeToastTimer = setTimeout(() => { $("#scope-toast").hidden = true; }, 3000);
       await loadProjects();
-      notice(approve ? "Scope revision approved." : "Scope draft saved. Approval is still required.", "info");
+      state.scopeSaving = false;
+      await loadScope();
     } catch (error) {
       $("#scope-error").textContent = error.message;
+    } finally {
+      state.scopeSaving = false;
+      renderScope();
     }
   }
 
   $("#save-scope-button").addEventListener("click", () => saveScope(false));
   $("#save-approve-scope-button").addEventListener("click", () => saveScope(true));
-  $("#approve-scope-button").addEventListener("click", async () => {
-    if (!state.scope) return;
-    try {
-      await api(`/api/projects/${encodeURIComponent(state.projectId)}/scope/${state.scope.version}/approve`, { method: "POST", body: {} });
-      await loadScope();
-      await loadProjects();
-      notice("Scope revision approved.", "info");
-    } catch (error) {
-      $("#scope-error").textContent = error.message;
-    }
-  });
+  updateRecordHint();
 
   $("#task-type").addEventListener("change", renderTaskAvailability);
 

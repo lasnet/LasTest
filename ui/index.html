@@ -238,36 +238,40 @@
       </section>
 
       <section data-view="scope" class="view" hidden aria-labelledby="scope-title">
-        <div id="scope-status" class="panel scope-status"></div>
         <div class="panel">
-          <h2>Rules</h2>
-          <p class="muted">Exclusions take priority. DNS names, IPs and CIDRs are normalized. Editing creates a new immutable revision.</p>
-          <div id="scope-rules"></div>
+          <header class="records-heading">
+            <div>
+              <h2>Records</h2>
+              <p class="muted">Exclusions take priority. DNS names, IP addresses and networks are normalized.</p>
+            </div>
+            <input id="scope-search" type="search" aria-label="Find the record" placeholder="Find the record">
+          </header>
+          <div id="scope-rules" tabindex="0" role="region" aria-label="Scope records"></div>
           <div class="rule-editor">
             <div class="field">
-              <label for="rule-kind">Kind</label>
+              <label for="rule-kind">Type</label>
               <select id="rule-kind">
-                <option value="exact_domain">Exact DNS name</option>
-                <option value="subdomain_tree">DNS tree with subdomains</option>
-                <option value="ip">IPv4/IPv6 address</option>
-                <option value="cidr">CIDR range</option>
+                <option value="exact_domain">DNS Name</option>
+                <option value="ip">IP address</option>
+                <option value="cidr">Network</option>
               </select>
             </div>
             <div class="field">
               <label for="rule-value">Value</label>
-              <input id="rule-value" placeholder="DNS name, IP or CIDR">
+              <input id="rule-value" placeholder="example.com" aria-describedby="rule-value-hint" autocomplete="off" spellcheck="false">
+              <p id="rule-value-hint" class="muted field-hint">DNS name, for example example.com.</p>
             </div>
             <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
             <button id="add-rule-button" class="secondary">Add rule</button>
           </div>
           <div class="field scope-note">
             <label for="scope-note">Revision note</label>
-            <input id="scope-note" placeholder="Why this revision changed">
+            <input id="scope-note" placeholder="Why this revision changed (optional)">
           </div>
-          <div class="button-row">
+          <div class="button-row scope-actions">
+            <button id="cancel-scope-button" class="secondary">Cancel changes</button>
             <button id="save-scope-button" class="secondary">Save draft</button>
-            <button id="save-approve-scope-button" class="primary">Save and approve</button>
-            <button id="approve-scope-button" class="primary">Approve current revision</button>
+            <button id="save-approve-scope-button" class="primary">Save changes</button>
           </div>
           <p id="scope-error" class="error" role="alert"></p>
         </div>
@@ -356,6 +360,17 @@
     </main>
   </div>
 
+  <dialog id="cancel-scope-dialog" aria-labelledby="cancel-scope-title" aria-describedby="cancel-scope-description">
+    <form method="dialog">
+      <h2 id="cancel-scope-title">Cancel changes?</h2>
+      <p id="cancel-scope-description"></p>
+      <div class="button-row">
+        <button value="keep" autofocus>Keep editing</button>
+        <button value="discard" class="primary">Discard changes</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="scope-toast" class="success-toast" role="status" hidden>The records have been successfully added.</div>
   <script src="/app.js" defer></script>
 </body>
 </html>

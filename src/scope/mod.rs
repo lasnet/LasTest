@@ -86,6 +86,17 @@ pub fn normalize_domain(input: &str) -> Result<String, ScopeError> {
     let ascii = idna::domain_to_ascii(trimmed)
         .map_err(|_| ScopeError::Domain(format!("IDNA conversion failed: {raw}")))?;
     let domain = ascii.to_ascii_lowercase();
+    if domain != "localhost"
+        && (!domain.contains('.')
+            || domain
+                .rsplit('.')
+                .next()
+                .is_some_and(|label| label.bytes().all(|b| b.is_ascii_digit())))
+    {
+        return Err(ScopeError::Domain(
+            "use a complete DNS name such as example.com".into(),
+        ));
+    }
     if domain.len() > 253 {
         return Err(ScopeError::Domain("domain exceeds 253 octets".into()));
     }
@@ -481,6 +492,18 @@ mod tests {
         assert!(normalize_domain(&format!("{too_long}.example")).is_err());
         assert!(normalize_domain("example..com").is_err());
         assert!(normalize_domain("https://example.com/x").is_err());
+        for invalid in ["543535", "мвамум", "example.123", "bad name.example"] {
+            assert!(normalize_domain(invalid).is_err(), "{invalid}");
+            assert!(Scope::from_json(&serde_json::json!([
+                {"kind": "exact_domain", "value": invalid}
+            ]))
+            .is_err());
+        }
+        assert_eq!(normalize_domain("localhost").unwrap(), "localhost");
+        assert_eq!(
+            normalize_domain("пример.рф").unwrap(),
+            "xn--e1afmkfd.xn--p1ai"
+        );
     }
 
     #[test]
