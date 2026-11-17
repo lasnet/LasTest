@@ -26,6 +26,8 @@
   const numberColumns = new Set(["HTTP status", "Port", "Evaluated", "Findings", "Not applicable"]);
   const wrapColumns = new Set(["URL", "Value", "Reason", "Title", "Asset", "Entity"]);
   const severityStyles = { critical: "bad", high: "bad", medium: "warn" };
+  const assetMetrics = [["Hosts", "hosts"], ["IP addresses", "ips"], ["URLs", "urls"]];
+  const dashboardMetrics = [...assetMetrics, ["Open ports", "open_ports"], ["Findings", "findings"], ["Jobs", "jobs"]];
 
   function el(tag, text, className) {
     const node = document.createElement(tag);
@@ -230,6 +232,15 @@
       state.project = null;
       select.value = "";
     }
+    renderProjectCaption();
+  }
+
+  function renderProjectCaption() {
+    const item = state.projects.find(({ project }) => project.id === state.projectId);
+    $("#project-name-label").textContent = item?.project.name ?? "Select a project…";
+    $("#project-scope-label").textContent = item?.scope_status
+      ? `Scope ${item.scope_status.replaceAll("_", " ")}`
+      : "Project";
   }
 
   async function loadTaskTypes() {
@@ -271,13 +282,17 @@
     state.dashboard = null;
     state.scope = null;
     state.rules = [];
+    renderProjectCaption();
     notice("");
     if (!id) {
       render();
       return;
     }
+    renderDashboard();
     try {
-      await Promise.all([loadScope(), loadJobs()]);
+      const requests = [loadScope(), loadJobs()];
+      if (["dashboard", "assets", "findings"].includes(state.view)) requests.push(loadDashboard());
+      await Promise.all(requests);
       render();
     } catch (error) {
       notice(error.message, "error");
@@ -296,6 +311,7 @@
     state.view = allowed.includes(hash) ? hash : "dashboard";
     if (state.view === "users" && state.me?.role !== "admin") state.view = "dashboard";
     $$("[data-view]").forEach((node) => { node.hidden = node.dataset.view !== state.view; });
+    $$("[data-view-heading]").forEach((node) => { node.hidden = node.dataset.viewHeading !== state.view; });
     $$("[data-view-link]").forEach((node) => {
       node.classList.toggle("active", node.dataset.viewLink === state.view);
       node.setAttribute("aria-current", node.dataset.viewLink === state.view ? "page" : "false");
@@ -327,7 +343,9 @@
 
   async function loadDashboard() {
     if (!requireProject()) return;
-    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/dashboard`);
+    const projectId = state.projectId;
+    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/dashboard`);
+    if (projectId !== state.projectId) return;
     state.dashboard = value;
     renderDashboard();
     renderAssets();
@@ -471,9 +489,40 @@
 
   function statusClass(status) {
     if (status === "succeeded") return "ok";
-    if (status === "partial" || status === "queued" || status === "running") return "warn";
+    if (status === "partial" || status === "queued" || status === "running" || status === "pending_review") return "warn";
     if (status === "failed" || status === "cancelled" || status === "interrupted") return "bad";
     return "";
+  }
+
+  function renderMetric(label, count, tone) {
+    return append(el("div", null, `metric tone-${tone}`),
+      el("span", label, "metric-label"),
+      el("span", countLabel.format(count), "metric-value"));
+  }
+
+  function renderAssetChart(data) {
+    const values = assetMetrics.map(([, key]) => data[key] ?? 0);
+    const peak = Math.max(5, ...values);
+    const magnitude = 10 ** Math.floor(Math.log10(peak / 5));
+    const step = magnitude * [1, 2, 5, 10].find((factor) => factor * magnitude * 5 >= peak);
+    const ceiling = Math.ceil(peak / step) * step;
+    const chart = el("div", null, "asset-chart");
+    chart.style.setProperty("--asset-axis-width", `${countLabel.format(ceiling).length + 3}ch`);
+    const axis = el("div", null, "asset-axis");
+    axis.setAttribute("aria-hidden", "true");
+    for (let tick = ceiling; tick >= 0; tick -= step) {
+      axis.appendChild(el("span", countLabel.format(tick), "asset-tick"));
+    }
+    const columns = el("div", null, "asset-columns");
+    assetMetrics.forEach(([label, key], index) => {
+      const value = values[index];
+      const column = el("div", null, `asset-column tone-${key}`);
+      const bar = el("div", null, "asset-bar");
+      bar.style.height = `${value / ceiling * 100}%`;
+      bar.appendChild(el("span", countLabel.format(value), "asset-value"));
+      append(columns, append(column, bar, el("span", label, "asset-label")));
+    });
+    $("#dashboard-asset-chart").replaceChildren(append(chart, axis, columns));
   }
 
   function renderDashboard() {
@@ -481,7 +530,7 @@
     const content = $("#dashboard-content");
     if (!state.projectId) {
       empty.hidden = false;
-      empty.replaceChildren(el("h2", "Choose a project"), el("p", "Select a project above to see its jobs, assets and findings."));
+      empty.replaceChildren(el("h2", "Choose a project"), el("p", "Use the project selector to see its jobs, assets and findings."));
       content.hidden = true;
       return;
     }
@@ -499,21 +548,9 @@
     }
     content.hidden = false;
     const metrics = $("#dashboard-metrics");
-    clear(metrics);
     const data = state.dashboard.metrics;
-    for (const group of [
-      [["Hosts", "hosts"], ["IP addresses", "ips"]],
-      [["URLs", "urls"], ["Open ports", "open_ports"]],
-      [["Findings", "findings"], ["Jobs", "jobs"]],
-    ]) {
-      const pair = el("div", null, "metric-pair");
-      for (const [label, key] of group) {
-        pair.appendChild(append(el("div", null, "metric"),
-          el("span", label, "metric-label"),
-          el("span", countLabel.format(data[key] ?? 0), "metric-value")));
-      }
-      metrics.appendChild(pair);
-    }
+    metrics.replaceChildren(...dashboardMetrics.map(([label, key]) => renderMetric(label, data[key] ?? 0, key)));
+    renderAssetChart(data);
     if (state.dashboard.data_status === "partial") {
       metrics.appendChild(el("p", "Some jobs completed partially. Review source errors below.", "warn-text"));
     }
@@ -548,7 +585,10 @@
     const http = $("#dashboard-http");
     clear(http);
     http.appendChild(table(["URL", "HTTP status", "Source", "Observed"], state.dashboard.recent_http || [], (row, column) => {
-      if (column === "HTTP status") return row.data?.status_code ?? "";
+      if (column === "HTTP status") {
+        const code = row.data?.status_code;
+        return code ? el("span", code, `badge ${code >= 500 ? "bad" : code >= 400 ? "warn" : "ok"}`) : "";
+      }
       if (column === "Source") return row.source;
       if (column === "Observed") return row.observed_at;
       return row.url;
@@ -559,7 +599,10 @@
     ports.appendChild(table(["IP", "Port", "State", "Service"], state.dashboard.recent_ports || [], (row, column) => {
       if (column === "IP") return row.ip;
       if (column === "Port") return row.data?.port ?? "";
-      if (column === "State") return row.data?.state ?? "";
+      if (column === "State") {
+        const status = row.data?.state;
+        return status ? el("span", status, `badge ${status === "open" ? "ok" : status === "timeout" ? "warn" : ""}`) : "";
+      }
       return row.data?.service || "";
     }));
 
@@ -597,9 +640,7 @@
     clear(summary);
     const counts = state.dashboard?.severity_counts || {};
     for (const severity of ["critical", "high", "medium", "low", "info", "unknown"]) {
-      const card = el("div", null, "metric");
-      append(card, el("span", severity, "metric-label"), el("span", countLabel.format(counts[severity] || 0), "metric-value"));
-      summary.appendChild(card);
+      summary.appendChild(renderMetric(severity, counts[severity] || 0, severity));
     }
     const node = $("#findings-table");
     clear(node);

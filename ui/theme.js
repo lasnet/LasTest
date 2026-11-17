@@ -12,7 +12,7 @@
     // Storage can be unavailable in restricted browser contexts.
   }
 
-  root.dataset.theme = themes.has(savedTheme) ? savedTheme : "green";
+  root.dataset.theme = themes.has(savedTheme) ? savedTheme : "light";
 
   document.addEventListener("DOMContentLoaded", () => {
     const select = document.querySelector("#theme-select");

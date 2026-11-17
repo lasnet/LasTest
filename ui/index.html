@@ -87,15 +87,37 @@
           <svg class="icon" aria-hidden="true"><use href="#icon-menu"/></svg> Menu
         </button>
       </div>
+      <div class="project-control">
+        <label for="project-select">Project</label>
+        <div class="project-field">
+          <svg class="icon" aria-hidden="true"><use href="#icon-project"/></svg>
+          <div class="project-caption" aria-hidden="true">
+            <strong id="project-name-label">Select a project…</strong>
+            <span id="project-scope-label">Project</span>
+          </div>
+          <select id="project-select">
+            <option value="">Select a project…</option>
+          </select>
+        </div>
+      </div>
       <div id="sidebar-menu" class="sidebar-menu">
         <nav aria-label="Main navigation">
-          <a href="#dashboard" data-view-link="dashboard"><svg class="icon" aria-hidden="true"><use href="#icon-dashboard"/></svg>Dashboard</a>
-          <a href="#scope" data-view-link="scope"><svg class="icon" aria-hidden="true"><use href="#icon-scope"/></svg>Scope</a>
-          <a href="#scans" data-view-link="scans"><svg class="icon" aria-hidden="true"><use href="#icon-scans"/></svg>Scans</a>
-          <a href="#assets" data-view-link="assets"><svg class="icon" aria-hidden="true"><use href="#icon-assets"/></svg>Assets</a>
-          <a href="#findings" data-view-link="findings"><svg class="icon" aria-hidden="true"><use href="#icon-findings"/></svg>Findings</a>
-          <a href="#reports" data-view-link="reports"><svg class="icon" aria-hidden="true"><use href="#icon-reports"/></svg>Reports</a>
-          <a href="#users" data-view-link="users" data-admin-only hidden><svg class="icon" aria-hidden="true"><use href="#icon-users"/></svg>Users</a>
+          <div class="nav-group">
+            <p class="nav-label">Workspace</p>
+            <a href="#dashboard" data-view-link="dashboard"><svg class="icon" aria-hidden="true"><use href="#icon-dashboard"/></svg>Dashboard</a>
+            <a href="#scope" data-view-link="scope"><svg class="icon" aria-hidden="true"><use href="#icon-scope"/></svg>Scope</a>
+            <a href="#scans" data-view-link="scans"><svg class="icon" aria-hidden="true"><use href="#icon-scans"/></svg>Scans</a>
+          </div>
+          <div class="nav-group">
+            <p class="nav-label">Results</p>
+            <a href="#assets" data-view-link="assets"><svg class="icon" aria-hidden="true"><use href="#icon-assets"/></svg>Assets</a>
+            <a href="#findings" data-view-link="findings"><svg class="icon" aria-hidden="true"><use href="#icon-findings"/></svg>Findings</a>
+            <a href="#reports" data-view-link="reports"><svg class="icon" aria-hidden="true"><use href="#icon-reports"/></svg>Reports</a>
+          </div>
+          <div class="nav-group" data-admin-only hidden>
+            <p class="nav-label">Administration</p>
+            <a href="#users" data-view-link="users"><svg class="icon" aria-hidden="true"><use href="#icon-users"/></svg>Users</a>
+          </div>
         </nav>
         <div class="sidebar-bottom">
           <div class="theme-control">
@@ -117,31 +139,58 @@
     </aside>
 
     <header class="workspace-header">
-      <div class="project-control">
-        <label for="project-select">Project</label>
-        <div class="project-field">
-          <svg class="icon" aria-hidden="true"><use href="#icon-project"/></svg>
-          <select id="project-select">
-            <option value="">Select a project…</option>
-          </select>
+      <div class="workspace-heading">
+        <div class="view-heading" data-view-heading="dashboard" hidden>
+          <h1 id="dashboard-title">Dashboard</h1>
+          <p>Scan activity and observations for the selected project.</p>
+        </div>
+        <div class="view-heading" data-view-heading="scope" hidden>
+          <h1 id="scope-title">Scope</h1>
+          <p>Define the targets this project is authorized to scan.</p>
+        </div>
+        <div class="view-heading" data-view-heading="scans" hidden>
+          <h1 id="scans-title">Scans</h1>
+          <p>Run tasks against approved targets and review their results.</p>
+        </div>
+        <div class="view-heading" data-view-heading="assets" hidden>
+          <h1 id="assets-title">Assets</h1>
+          <p>Hosts, IP addresses and URLs discovered in this project.</p>
+        </div>
+        <div class="view-heading" data-view-heading="findings" hidden>
+          <h1 id="findings-title">Findings</h1>
+          <p>Review identified issues by severity and affected asset.</p>
+        </div>
+        <div class="view-heading" data-view-heading="reports" hidden>
+          <h1 id="reports-title">Reports</h1>
+          <p>Download a snapshot of the selected project.</p>
+        </div>
+        <div class="view-heading" data-view-heading="users" hidden>
+          <h1 id="users-title">Users and audit</h1>
+          <p>Manage access to LasTest and review account activity.</p>
         </div>
       </div>
       <div class="header-actions">
         <button id="refresh-button" class="secondary refresh-button" aria-label="Refresh" title="Refresh"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>Refresh</span></button>
-        <button id="new-project-button" class="primary"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg>New project</button>
+        <button id="new-project-button" class="primary" aria-label="New project" title="New project"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg><span>New project</span></button>
       </div>
     </header>
 
     <main class="workspace">
       <section id="new-project-panel" class="panel" hidden aria-labelledby="new-project-title">
         <h2 id="new-project-title">Create project</h2>
-        <form id="new-project-form" class="grid-form">
-          <label for="project-name">Name</label>
-          <input id="project-name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="64">
-          <label for="project-client">Client</label>
-          <input id="project-client">
-          <label for="project-description">Description</label>
-          <input id="project-description">
+        <form id="new-project-form" class="grid-form project-form">
+          <div class="field">
+            <label for="project-name">Name</label>
+            <input id="project-name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="64">
+          </div>
+          <div class="field">
+            <label for="project-client">Client</label>
+            <input id="project-client">
+          </div>
+          <div class="field field-wide">
+            <label for="project-description">Description</label>
+            <input id="project-description">
+          </div>
           <button type="submit" class="primary">Create</button>
         </form>
       </section>
@@ -149,33 +198,34 @@
       <div id="notice" class="notice" role="status" hidden></div>
 
       <section data-view="dashboard" class="view" hidden aria-labelledby="dashboard-title">
-        <header class="view-heading">
-          <h1 id="dashboard-title">Dashboard</h1>
-          <p>Scan activity and observations for the selected project.</p>
-        </header>
         <div id="dashboard-empty" class="empty dashboard-empty" hidden></div>
         <div id="dashboard-content">
           <div id="dashboard-metrics" class="metrics"></div>
           <div class="dashboard-grid">
-            <section class="panel">
+            <section class="panel asset-overview" aria-labelledby="asset-overview-title">
+              <h2 id="asset-overview-title">Asset overview</h2>
+              <p class="muted">For the selected project</p>
+              <div id="dashboard-asset-chart"></div>
+            </section>
+            <section class="panel dashboard-jobs">
               <header class="panel-heading">
                 <h2>Recent jobs</h2>
                 <a href="#scans" class="text-action">View scans <svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></a>
               </header>
               <div id="dashboard-jobs"></div>
             </section>
-            <section class="panel">
+            <section class="panel dashboard-sources">
               <header class="panel-heading source-heading">
                 <h2>Source availability</h2>
                 <div id="dashboard-worker"></div>
               </header>
               <div id="dashboard-availability"></div>
             </section>
-            <section class="panel">
+            <section class="panel dashboard-http">
               <h2>HTTP observations</h2>
               <div id="dashboard-http"></div>
             </section>
-            <section class="panel">
+            <section class="panel dashboard-ports">
               <h2>Ports</h2>
               <div id="dashboard-ports"></div>
             </section>
@@ -188,10 +238,6 @@
       </section>
 
       <section data-view="scope" class="view" hidden aria-labelledby="scope-title">
-        <header class="view-heading">
-          <h1 id="scope-title">Scope</h1>
-          <p>Define the targets this project is authorized to scan.</p>
-        </header>
         <div id="scope-status" class="panel scope-status"></div>
         <div class="panel">
           <h2>Rules</h2>
@@ -232,10 +278,6 @@
       </section>
 
       <section data-view="scans" class="view" hidden aria-labelledby="scans-title">
-        <header class="view-heading">
-          <h1 id="scans-title">Scans</h1>
-          <p>Run tasks against approved targets and review their results.</p>
-        </header>
         <div class="scan-grid">
           <section class="panel">
             <h2>Submit job</h2>
@@ -267,29 +309,17 @@
       </section>
 
       <section data-view="assets" class="view" hidden aria-labelledby="assets-title">
-        <header class="view-heading">
-          <h1 id="assets-title">Assets</h1>
-          <p>Hosts, IP addresses and URLs discovered in this project.</p>
-        </header>
         <section class="panel"><h2>Hosts</h2><div id="assets-hosts"></div></section>
         <section class="panel"><h2>IP addresses</h2><div id="assets-ips"></div></section>
         <section class="panel"><h2>URLs</h2><div id="assets-urls"></div></section>
       </section>
 
       <section data-view="findings" class="view" hidden aria-labelledby="findings-title">
-        <header class="view-heading">
-          <h1 id="findings-title">Findings</h1>
-          <p>Review identified issues by severity and affected asset.</p>
-        </header>
         <div id="findings-summary" class="metrics"></div>
         <section class="panel"><h2>Finding details</h2><div id="findings-table"></div></section>
       </section>
 
       <section data-view="reports" class="view" hidden aria-labelledby="reports-title">
-        <header class="view-heading">
-          <h1 id="reports-title">Reports</h1>
-          <p>Download a snapshot of the selected project.</p>
-        </header>
         <section class="panel report-panel">
           <h2>Export project data</h2>
           <p>Reports are built from the current normalized project snapshot. JSON includes scope, history, DNS, HTTP, services, sources and findings. CSV neutralizes external values that could be interpreted as formulas.</p>
@@ -301,19 +331,21 @@
       </section>
 
       <section data-view="users" class="view" hidden aria-labelledby="users-title">
-        <header class="view-heading">
-          <h1 id="users-title">Users and audit</h1>
-          <p>Manage access to LasTest and review account activity.</p>
-        </header>
         <div class="panel">
           <h2>Create user</h2>
           <form id="user-form" class="grid-form">
-            <label for="user-username">Username</label>
-            <input id="user-username" required>
-            <label for="user-password">Password (12+ characters)</label>
-            <input id="user-password" type="password" required minlength="12">
-            <label for="user-role">Role</label>
-            <select id="user-role"><option value="viewer">viewer</option><option value="analyst">analyst</option><option value="admin">admin</option></select>
+            <div class="field">
+              <label for="user-username">Username</label>
+              <input id="user-username" required>
+            </div>
+            <div class="field">
+              <label for="user-password">Password (12+ characters)</label>
+              <input id="user-password" type="password" required minlength="12">
+            </div>
+            <div class="field">
+              <label for="user-role">Role</label>
+              <select id="user-role"><option value="viewer">viewer</option><option value="analyst">analyst</option><option value="admin">admin</option></select>
+            </div>
             <button type="submit" class="primary">Create user</button>
           </form>
           <p id="user-error" class="error" role="alert"></p>
