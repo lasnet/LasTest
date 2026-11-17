@@ -55,7 +55,7 @@ docker network create "$NETWORK" >/dev/null
 docker volume create "$VOLUME" >/dev/null
 
 echo "[2/9] start serve and worker as unprivileged processes"
-docker run -d --name "$API" --network "$NETWORK" --network-alias api \
+docker run -d --name "$API" --network "$NETWORK" --network-alias api.lastest.test \
   -p "127.0.0.1:${PORT}:8080" \
   -v "${VOLUME}:/data" \
   -e LASTEST_DATA_DIR=/data -e LASTEST_BIND=0.0.0.0:8080 \
@@ -85,7 +85,7 @@ PROJECT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]
 echo "[5/9] approve scope for the API container host"
 docker exec -i "$API" sh -c 'cat > /tmp/rules.json' <<'JSON'
 [
-  {"kind": "exact_domain", "value": "api"},
+  {"kind": "exact_domain", "value": "api.lastest.test"},
   {"kind": "cidr", "value": "172.16.0.0/12"}
 ]
 JSON
@@ -94,7 +94,7 @@ cli scope update --project "$PROJECT_ID" --rules-file /tmp/rules.json \
 
 echo "[6/9] run a real HTTP probe against the isolated API"
 JOB_JSON="$(cli job submit --project "$PROJECT_ID" --task-type http.probe \
-  --params '{"targets":["http://api:8080/api/health/live"],"mode":"url"}' \
+  --params '{"targets":["http://api.lastest.test:8080/api/health/live"],"mode":"url"}' \
   --idempotency-key e2e-http-1)"
 JOB_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["id"])' <<<"$JOB_JSON")"
 STATUS="queued"
