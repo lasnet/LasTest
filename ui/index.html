@@ -32,7 +32,8 @@
     <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4m-12 5v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
   </svg>
 
-  <div id="login-view" class="login-shell">
+  <div id="loading-view" class="loading-shell" role="status">Loading LasTest…</div>
+  <div id="login-view" class="login-shell" hidden>
     <main class="login-card" aria-labelledby="login-title">
       <div class="brand">
         <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg></span>
@@ -195,7 +196,6 @@
         </form>
       </section>
 
-      <div id="notice" class="notice" role="status" hidden></div>
 
       <section data-view="dashboard" class="view" hidden aria-labelledby="dashboard-title">
         <div id="dashboard-empty" class="empty dashboard-empty" hidden></div>
@@ -264,14 +264,15 @@
             <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
             <button id="add-rule-button" class="secondary">Add rule</button>
           </div>
-          <div class="field scope-note">
-            <label for="scope-note">Revision note</label>
-            <input id="scope-note" placeholder="Why this revision changed (optional)">
-          </div>
-          <div class="button-row scope-actions">
-            <button id="cancel-scope-button" class="secondary">Cancel changes</button>
-            <button id="save-scope-button" class="secondary">Save draft</button>
-            <button id="save-approve-scope-button" class="primary">Save changes</button>
+          <div class="scope-save-row">
+            <div class="field scope-note">
+              <label for="scope-note">Revision note</label>
+              <input id="scope-note" placeholder="Why this revision changed (optional)">
+            </div>
+            <div class="button-row scope-actions">
+              <button id="cancel-scope-button" class="secondary">Cancel changes</button>
+              <button id="save-approve-scope-button" class="primary">Save changes</button>
+            </div>
           </div>
           <p id="scope-error" class="error" role="alert"></p>
         </div>
@@ -370,7 +371,7 @@
       </div>
     </form>
   </dialog>
-  <div id="scope-toast" class="success-toast" role="status" hidden>The records have been successfully added.</div>
+  <div id="notice" class="notice" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   <script src="/app.js" defer></script>
 </body>
 </html>

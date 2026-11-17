@@ -49,7 +49,9 @@
     return parent;
   }
 
+  let noticeTimer;
   function notice(message, kind = "info") {
+    clearTimeout(noticeTimer);
     const node = $("#notice");
     if (!message) {
       node.hidden = true;
@@ -59,6 +61,10 @@
     node.hidden = false;
     node.className = `notice ${kind}`;
     node.textContent = message;
+    noticeTimer = setTimeout(() => {
+      node.hidden = true;
+      node.textContent = "";
+    }, 10000);
   }
 
   function displayTime(value) {
@@ -169,6 +175,8 @@
   }
 
   function showLogin() {
+    $("#loading-view").hidden = true;
+    notice("");
     $("#app-view").hidden = true;
     $("#login-view").hidden = false;
     $("#setup-form").hidden = true;
@@ -177,6 +185,15 @@
   }
 
   function showApp() {
+    $("#loading-view").hidden = true;
+    state.projectId = "";
+    state.project = null;
+    state.dashboard = null;
+    state.scope = null;
+    state.scopeHistory = [];
+    state.rules = [];
+    state.jobs = [];
+    $("#scope-note").value = "";
     $("#login-view").hidden = true;
     $("#app-view").hidden = false;
     $("#current-user").replaceChildren(
@@ -189,7 +206,6 @@
     $("#new-project-button").hidden = !analyst;
     $("#submit-job-button").disabled = !analyst;
     $("#submit-chain-button").disabled = !analyst;
-    $("#save-scope-button").disabled = !analyst;
     $("#save-approve-scope-button").disabled = !analyst;
     $("#add-rule-button").disabled = !analyst;
   }
@@ -217,6 +233,13 @@
   async function loadProjects() {
     const value = await api("/api/projects?limit=500");
     state.projects = value.items || [];
+    if (!state.projectId) {
+      try {
+        state.projectId = localStorage.getItem(projectStorageKey()) || "";
+      } catch {
+        // The selector still works when browser storage is unavailable.
+      }
+    }
     const select = $("#project-select");
     clear(select);
     select.appendChild(new Option("Select a project…", ""));
@@ -232,8 +255,22 @@
       state.projectId = "";
       state.project = null;
       select.value = "";
+      rememberProject();
     }
     renderProjectCaption();
+  }
+
+  function projectStorageKey() {
+    return `lastest.project.${state.me.id || state.me.username}`;
+  }
+
+  function rememberProject() {
+    try {
+      if (state.projectId) localStorage.setItem(projectStorageKey(), state.projectId);
+      else localStorage.removeItem(projectStorageKey());
+    } catch {
+      // Keep the current selection in memory when storage is unavailable.
+    }
   }
 
   function renderProjectCaption() {
@@ -279,10 +316,13 @@
 
   async function selectProject(id) {
     state.projectId = id;
+    rememberProject();
     state.project = state.projects.find((item) => item.project.id === id)?.project || null;
     state.dashboard = null;
     state.scope = null;
+    state.scopeHistory = [];
     state.rules = [];
+    state.jobs = [];
     $("#scope-note").value = "";
     $("#scope-search").value = "";
     $("#scope-error").textContent = "";
@@ -829,6 +869,11 @@
     state.projectId = "";
     state.project = null;
     state.dashboard = null;
+    state.scope = null;
+    state.scopeHistory = [];
+    state.rules = [];
+    state.jobs = [];
+    $("#scope-note").value = "";
     showLogin();
   });
 
@@ -866,7 +911,7 @@
 
   function updateScopeControls() {
     const editable = Boolean(state.scope) && state.me?.role !== "viewer" && !state.scopeSaving;
-    for (const id of ["rule-kind", "rule-value", "rule-exclusion", "add-rule-button", "scope-note", "save-scope-button", "save-approve-scope-button"]) {
+    for (const id of ["rule-kind", "rule-value", "rule-exclusion", "add-rule-button", "scope-note", "save-approve-scope-button"]) {
       $(`#${id}`).disabled = !editable;
     }
     $("#cancel-scope-button").disabled = !editable || !scopeHasChanges();
@@ -953,8 +998,7 @@
     renderScope();
   });
 
-  let scopeToastTimer;
-  async function saveScope(approve) {
+  async function saveScope() {
     if (!state.scope || state.scopeSaving || !requireProject()) return;
     const projectId = state.projectId;
     const rules = state.rules.map(({ kind, value, exclusion, verified }) => ({ kind, value, exclusion, verified }));
@@ -964,14 +1008,12 @@
     try {
       const value = await api(`/api/projects/${encodeURIComponent(projectId)}/scope`, {
         method: "PUT",
-        body: { rules, expected_version: state.scope.version, note: $("#scope-note").value, approve },
+        body: { rules, expected_version: state.scope.version, note: $("#scope-note").value, approve: true },
       });
       if (state.projectId !== projectId) return;
       applyScope(value.scope);
       $("#scope-note").value = "";
-      clearTimeout(scopeToastTimer);
-      $("#scope-toast").hidden = false;
-      scopeToastTimer = setTimeout(() => { $("#scope-toast").hidden = true; }, 3000);
+      notice("The records have been successfully added.", "success");
       await loadProjects();
       state.scopeSaving = false;
       await loadScope();
@@ -983,8 +1025,7 @@
     }
   }
 
-  $("#save-scope-button").addEventListener("click", () => saveScope(false));
-  $("#save-approve-scope-button").addEventListener("click", () => saveScope(true));
+  $("#save-approve-scope-button").addEventListener("click", saveScope);
   updateRecordHint();
 
   $("#task-type").addEventListener("change", renderTaskAvailability);

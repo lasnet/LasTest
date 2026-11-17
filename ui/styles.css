@@ -353,9 +353,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .text-action { display: inline-flex; gap: 5px; align-items: center; min-height: 30px; padding: 3px 9px; border: 1px solid var(--control); border-radius: var(--control-radius); color: var(--ink); font-size: 13px; font-weight: 600; white-space: nowrap; text-decoration: none; }
 .text-action:hover { text-decoration: underline; }
 .text-action .icon { width: 15px; height: 15px; }
-#new-project-panel, .notice { margin-bottom: var(--gap); }
-.notice { padding: 10px 13px; border: 1px solid var(--info-rule); border-radius: var(--control-radius); background: var(--info-surface); color: var(--info); }
-.notice.error { border-color: var(--error-rule); background: var(--error-surface); color: var(--danger); }
+#new-project-panel { margin-bottom: var(--gap); }
+.notice { border: 1px solid var(--info-rule); background: color-mix(in srgb, var(--info-surface) 90%, transparent); color: var(--info); }
+.notice.error { border-color: var(--error-rule); background: color-mix(in srgb, var(--error-surface) 90%, transparent); color: var(--danger); }
+.notice.success { border-color: color-mix(in srgb, var(--success), transparent 70%); background: color-mix(in srgb, var(--success-surface) 90%, transparent); color: var(--success); }
 
 .grid-form { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
 .grid-form button { grid-column: 1; justify-self: start; margin-top: 4px; }
@@ -569,20 +570,20 @@ tbody tr:hover { background: var(--canvas); }
 #scope-rules .record-pending { background: var(--info-surface); }
 #scope-rules .record-pending:hover { background: var(--info-surface); }
 #scope-rules button { min-height: 28px; }
-.scope-actions { justify-content: flex-end; padding-top: 4px; }
+.scope-save-row { display: flex; align-items: end; gap: 16px; }
+.scope-note { flex: 1; min-width: 0; }
+.scope-actions { flex: none; justify-content: flex-end; margin: 0; flex-wrap: nowrap; }
 .scope-actions button { min-width: 110px; }
-.success-toast {
+.notice {
   position: fixed;
   top: 26px;
   left: 50%;
   translate: -50% 0;
   z-index: 30;
-  max-width: calc(100vw - 32px);
+  max-width: min(640px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
   padding: 13px 20px;
-  border: 1px solid color-mix(in srgb, var(--success), transparent 70%);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--success-surface) 88%, transparent);
-  color: var(--success);
   box-shadow: 0 4px 16px #14141b18;
 }
 dialog {
@@ -604,4 +605,12 @@ dialog .button-row { justify-content: flex-end; }
   #scope-rules .table-wide td { height: auto; }
   #scope-rules button { min-height: 36px; }
   .rule-editor > .checkbox, .rule-editor > button { margin-top: 0; }
+}
+
+.loading-shell { display: grid; place-items: center; min-height: 100svh; color: var(--muted); }
+@media (max-width: 700px) {
+  .scope-save-row { flex-wrap: wrap; gap: 12px; }
+  .scope-note { flex-basis: 100%; }
+  .scope-actions { width: 100%; }
+  .scope-actions button { flex: 1; }
 }
