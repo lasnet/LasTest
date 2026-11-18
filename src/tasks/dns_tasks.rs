@@ -11,11 +11,6 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::net::IpAddr;
 
-const DEFAULT_WORDS: &[&str] = &[
-    "www", "api", "app", "admin", "dev", "staging", "test", "mail", "smtp", "vpn", "portal",
-    "static", "cdn", "blog", "support", "docs", "git", "ci", "monitor", "status",
-];
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecordsParams {
@@ -23,14 +18,6 @@ struct RecordsParams {
     targets: Vec<String>,
     #[serde(default)]
     record_types: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WordlistParams {
-    domain: String,
-    #[serde(default)]
-    words: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,34 +221,45 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     Ok(outcome.finalize())
 }
 
+async fn resolve_discovery_ips(
+    dns: &crate::net::DnsClient,
+    ctx: &TaskContext,
+    domain: &str,
+    host: &str,
+) -> Result<Vec<IpAddr>> {
+    ctx.ensure_active()?;
+    if !crate::tasks::subfinder::allows_discovery_dns(ctx, domain, host)? {
+        anyhow::bail!("DNS discovery host is excluded by scope");
+    }
+    let lookup = dns.resolve_ips(host);
+    tokio::pin!(lookup);
+    loop {
+        tokio::select! {
+            result = &mut lookup => return result,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                ctx.ensure_active()?;
+                if !crate::tasks::subfinder::allows_discovery_dns(ctx, domain, host)? {
+                    anyhow::bail!("DNS discovery scope changed");
+                }
+            }
+        }
+    }
+}
+
 pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
-    let params: WordlistParams = parse_params(&job.params)?;
+    crate::tasks::dnsmap::validate(&job.params, &ctx.config)?;
+    let params: crate::tasks::dnsmap::WordlistParams = parse_params(&job.params)?;
     let domain = normalize_domain(&params.domain)?;
     ctx.authorize_host(&domain)?;
-    let mut words: Vec<String> = if params.words.is_empty() {
-        DEFAULT_WORDS
-            .iter()
-            .map(|value| value.to_string())
-            .collect()
-    } else {
-        params.words
-    };
-    words = dedup_strings(&words);
-    if words.len() > ctx.config.max_wordlist_entries {
-        anyhow::bail!(
-            "wordlist contains {} entries, limit is {}",
-            words.len(),
-            ctx.config.max_wordlist_entries
-        );
-    }
+    let words = crate::tasks::dnsmap::words(&params);
     let dns = ctx.dns()?;
     let mut outcome = TaskOutcome::new();
     outcome.target(words.len());
-    // Wildcard detection uses two random labels; any address shared by both is
-    // treated as a wildcard answer and is not reported as a found host.
+    // Probe twice to collect wildcard addresses from both address families.
     let mut wildcard: HashSet<IpAddr> = HashSet::new();
     let mut wildcard_ips: Vec<String> = Vec::new();
     for _ in 0..2 {
+        ctx.ensure_active()?;
         let label: String = (0..12)
             .map(|_| {
                 let idx = rand::rng().random_range(0..36);
@@ -269,7 +267,10 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             })
             .collect();
         let probe = format!("{label}.{domain}");
-        if let Ok(ips) = dns.resolve_ips(&probe).await {
+        if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &probe)? {
+            continue;
+        }
+        if let Ok(ips) = resolve_discovery_ips(&dns, ctx, &domain, &probe).await {
             for ip in &ips {
                 wildcard.insert(*ip);
                 wildcard_ips.push(ip.to_string());
@@ -279,21 +280,43 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     wildcard_ips.sort();
     wildcard_ips.dedup();
     let mut found = Vec::new();
-    for word in words {
-        ctx.ensure_active()?;
-        let candidate = match normalize_domain(&format!("{word}.{domain}")) {
-            Ok(value) => value,
-            Err(err) => {
-                outcome.error(format!("invalid wordlist label {word}: {err}"));
-                outcome.skipped();
+    let candidates = crate::tasks::dnsmap::discover(&params, &words, ctx).await?;
+    let mut lookups = tokio::task::JoinSet::new();
+    let mut candidates = candidates.into_iter();
+    loop {
+        while lookups.len() < params.concurrency {
+            let Some(candidate) = candidates.next() else {
+                break;
+            };
+            ctx.ensure_active()?;
+            if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &candidate)? {
+                continue;
+            }
+            let dns = dns.clone();
+            let ctx = ctx.clone();
+            let domain = domain.clone();
+            lookups.spawn(async move {
+                let result = resolve_discovery_ips(&dns, &ctx, &domain, &candidate).await;
+                (candidate, result)
+            });
+        }
+        let next = tokio::select! {
+            next = lookups.join_next() => next,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                ctx.ensure_active()?;
+                ctx.authorize_host(&domain)?;
                 continue;
             }
         };
-        if !ctx.allows_host_now(&candidate) {
-            outcome.skipped();
+        let Some(next) = next else {
+            break;
+        };
+        let (candidate, result) = next?;
+        ctx.ensure_active()?;
+        if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &candidate)? {
             continue;
         }
-        match dns.resolve_ips(&candidate).await {
+        match result {
             Ok(ips) => {
                 if !wildcard.is_empty() && ips.iter().all(|ip| wildcard.contains(ip)) {
                     outcome.skipped();
@@ -329,9 +352,17 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             }
         }
     }
+    found.sort();
+    outcome.counters.skipped = outcome
+        .counters
+        .targets
+        .saturating_sub(outcome.counters.processed);
     outcome.result = json!({
         "format_version": "1",
         "domain": domain,
+        "engine": "dnsmap",
+        "wordlist": if params.words.is_empty() { params.wordlist.as_str() } else { "custom" },
+        "concurrency": params.concurrency,
         "found": found,
         "wildcard_addresses": wildcard_ips,
         "searched": outcome.counters.targets,

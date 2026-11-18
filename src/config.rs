@@ -55,6 +55,8 @@ pub struct Config {
     pub tls_expiry_warning_days: i64,
     pub nmap_path: Option<PathBuf>,
     pub subfinder_path: Option<PathBuf>,
+    pub dnsmap_path: Option<PathBuf>,
+    pub dnsmap_timeout_seconds: u64,
     pub subfinder_timeout_seconds: u64,
     pub nmap_timeout_seconds: u64,
     pub nmap_max_output_bytes: u64,
@@ -99,6 +101,8 @@ impl Default for Config {
             tls_expiry_warning_days: 30,
             nmap_path: None,
             subfinder_path: None,
+            dnsmap_path: None,
+            dnsmap_timeout_seconds: 600,
             subfinder_timeout_seconds: 150,
             nmap_timeout_seconds: 120,
             nmap_max_output_bytes: 4 * 1024 * 1024,
@@ -146,6 +150,9 @@ impl Config {
     }
 
     fn apply_env(&mut self) -> Result<()> {
+        if let Ok(value) = std::env::var("LASTEST_DNSMAP_PATH") {
+            self.dnsmap_path = (!value.trim().is_empty()).then(|| PathBuf::from(value));
+        }
         if let Ok(value) = std::env::var("LASTEST_SUBFINDER_PATH") {
             self.subfinder_path = (!value.trim().is_empty()).then(|| PathBuf::from(value));
         }
@@ -202,6 +209,9 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.dnsmap_timeout_seconds == 0 {
+            anyhow::bail!("dnsmap_timeout_seconds must be positive");
+        }
         if self.subfinder_timeout_seconds == 0 {
             anyhow::bail!("subfinder_timeout_seconds must be positive");
         }

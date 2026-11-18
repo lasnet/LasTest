@@ -74,13 +74,15 @@ install -d -m 0750 -o 10001 -g 10001 /srv/lastest-data
 Настройки роста:
 
 - SQLite WAL на локальном томе, короткие транзакции, `busy_timeout`;
-- `max_artifact_bytes`, `max_body_bytes`, `max_queue_targets`, `max_crawl_pages`, `max_wordlist_entries`;
+- `max_artifact_bytes`, `max_body_bytes`, `max_queue_targets`, `max_crawl_pages`, `max_wordlist_entries` (только HTTP paths; для DNS-словарей лимит снят);
 - Docker logging ограничен `20m × 5`;
 - `retention_days` задокументирован; автоматическое удаление доказательств не включено в первый релиз, очистку выполняйте по инструкции [rollback.md](rollback.md).
 
 ## Конфигурация
 
-Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_NMAP_PATH`, `LASTEST_LOG_LEVEL`.
+Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_NMAP_PATH`, `LASTEST_SUBFINDER_PATH`, `LASTEST_DNSMAP_PATH`, `LASTEST_LOG_LEVEL`.
+
+Docker-образ включает классический dnsmap 0.36 из закреплённого исходника. Его служебные DNS-пробы отключены патчем: Scope и wildcard проверяет LasTest. Вне Docker задайте `dnsmap_path` / `LASTEST_DNSMAP_PATH` на аналогично собранный бинарник (патч `src/tasks/dnsmap-probes.patch`). Без бинарника задача отображается как недоступная. dnsmap использует системный DNS resolver; для контейнера настройте DNS средствами Docker. Повторная A/AAAA-проверка LasTest использует `LASTEST_DNS_SERVER`, если он задан. `dnsmap_timeout_seconds` задаёт общий таймаут процессов одного домена, по умолчанию 600 секунд. Лимиты артефактов и сетевых таймаутов сохраняются.
 
 Внутренние диапазоны — только явно заданные администратором. Адреса метаданных (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) блокируются всегда. DNS-имя в scope не даёт разрешения на сканирование всех портов его IP.
 

@@ -67,7 +67,7 @@ lastest --data-dir /data restore --from ./backup-2026-11-15 --force
 | `subdomains.discover` | домены из scope/явно | host-наблюдения, wildcard, страницы и квоты Cert Spotter |
 | `subdomains.subfinder` | домены из scope/явно, источники, resolve | host, DNS/IP-наблюдения, subdomains artifact |
 | `dns.records` | цели + типы A/AAAA/CNAME/MX/NS/TXT/PTR | DNS-наблюдения, IP-связи, артефакт |
-| `dns.wordlist` | домен + слова | найденные хосты, wildcard-диагностика |
+| `dns.wordlist` | домен, wordlist=default, concurrency=4/8/16 (default 8); words через API | найденные хосты, wildcard-диагностика |
 | `reverse.ip` | явные IP | PTR, отдельно Shodan InternetDB/Censys |
 | `http.probe` | roots или URL | проверенный IP, URL, status, title, server, TLS, технологии |
 | `urls.passive` | домены | Wayback CDX и Common Crawl URL с источником |

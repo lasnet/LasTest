@@ -36,8 +36,8 @@ pub fn validate(params: &serde_json::Value, config: &crate::config::Config) -> R
         anyhow::bail!("subfinder is unavailable: configure LASTEST_SUBFINDER_PATH");
     }
     let params: SubfinderParams = parse_params(params)?;
-    if params.domains.len() > 50 || params.sources.len() > 32 {
-        anyhow::bail!("subfinder accepts at most 50 domains and 32 sources");
+    if params.sources.len() > 32 {
+        anyhow::bail!("subfinder accepts at most 32 sources");
     }
     for domain in &params.domains {
         normalize_domain(domain)?;
@@ -72,8 +72,8 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         params.domains
     };
     let domains = dedup_strings(&domains);
-    if domains.is_empty() || domains.len() > 50 {
-        anyhow::bail!("subfinder requires 1-50 allowed DNS names");
+    if domains.is_empty() {
+        anyhow::bail!("subfinder requires at least one allowed DNS name");
     }
     let path = ctx
         .config
@@ -306,7 +306,7 @@ async fn run_domains(
 
 // Discovery may validate child names through DNS even when the approved seed
 // is an exact domain. Connection authorization continues to use the host rules.
-fn allows_discovery_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<bool> {
+pub(crate) fn allows_discovery_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<bool> {
     let current = ctx.current_scope()?;
     Ok((host == domain || host.ends_with(&format!(".{domain}")))
         && ctx.scope.snapshot.allows_host(domain)

@@ -1107,8 +1107,8 @@
   const scanModules = [
     { id: "subdomains", title: "Subdomain Enumeration", family: "recon", mode: "Passive Recon", tone: "green",
       tasks: ["subdomains.subfinder", "subdomains.discover", "dns.records", "dns.wordlist"],
-      description: "Find subdomains through passive sources. With Resolve IP addresses enabled, Subfinder results are checked for A/AAAA records before hosts and IPs are added to Assets. DNS validation includes subdomains of the approved seed and respects exclusions. Connection checks use the approved host and IP scope.",
-      planned: "Subfinder, subdomain-only ffuf, and an optimized dnsmap wordlist with eight workers." },
+      description: "Find subdomains with Subfinder, Certificate Transparency or a DNS wordlist, and query DNS records for names in Scope. Resolve IP addresses checks Subfinder results for A/AAAA before adding hosts and IPs to Assets. DNS discovery respects Scope exclusions; connection checks use the approved host and IP scope.",
+      planned: "Subdomain-only ffuf. Subfinder and dnsmap wordlist discovery are available." },
     { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
       tasks: ["reverse.ip"],
       description: "Discover IP-related assets using PTR and configured passive reverse-IP providers. Explicit approved IP addresses are required.",
@@ -1211,7 +1211,7 @@
   const scanFieldLabels = {
     domains: "Domains", targets: "Targets", domain: "Domain", ips: "IP addresses",
     sources: "Sources", resolve: "Resolve IP addresses", providers: "Providers",
-    record_types: "DNS record types", words: "Wordlist", mode: "Scan mode", seeds: "Starting URLs",
+    record_types: "DNS record types", wordlist: "Wordlist", concurrency: "Parallel workers", words: "Wordlist", mode: "Scan mode", seeds: "Starting URLs",
     base_urls: "Base URLs", ports: "TCP ports", max_pages: "Maximum pages",
     max_depth: "Maximum depth", proxy_profile: "SOCKS5 profile", cookie_names: "Session cookie names", limit: "Maximum URLs",
   };
@@ -1234,7 +1234,9 @@
   }
 
   function hiddenScanField(task, key) {
-    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && key === "sources");
+    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && key === "sources")
+      || (task.name === "subdomains.discover" && key === "providers")
+      || (task.name === "dns.wordlist" && key === "words");
   }
 
   function defaultScanParams(task) {
@@ -1284,6 +1286,8 @@
         fields.appendChild(el("p", targets.length ? `${targets.length} ${ipTask ? "IP addresses" : "DNS names"} from project Scope: ${targets.join(", ")}`
           : ipTask ? "No IP address records in Scope. Add allowed IP address records in Scope to use this task. DNS names alone do not authorize IP scanning."
           : "No allowed DNS names in Scope. Add DNS Name records in Scope to use this task.", "muted field-hint"));
+        if (task.name === "subdomains.discover") fields.appendChild(el("p", "Source: Cert Spotter (Certificate Transparency). Finds subdomain names published in TLS certificates without querying the target's DNS.", "muted field-hint"));
+        if (task.name === "dns.records") fields.appendChild(el("p", "Query DNS records for names in project Scope. This does not discover subdomains by guessing names. Leave record types empty to query A, AAAA, CNAME, MX, NS and TXT. PTR applies only to explicit IP targets via API/CLI.", "muted field-hint"));
         for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
           if (hiddenScanField(task, key)) continue;
           const field = el("div", null, "field");
@@ -1294,7 +1298,7 @@
           if (property.enum) {
             input = el("select");
             for (const option of property.enum) input.appendChild(new Option(option, option));
-            input.value = params[key] ?? property.enum[0];
+            input.value = params[key] ?? property.default ?? property.enum[0];
           } else {
             input = el(property.type === "array" && property.items?.type !== "integer" ? "textarea" : "input");
             if (property.type === "boolean") {
@@ -1311,7 +1315,23 @@
           input.dataset.scanParam = key;
           input.dataset.task = task.name;
           input.disabled = scanning || state.me?.role === "viewer";
-          append(field, label, input);
+          if (property.type === "boolean") {
+            label.textContent = "";
+            label.className = "checkbox";
+            append(label, input, el("span", scanFieldLabels[key] || key));
+            field.appendChild(label);
+          } else append(field, label, input);
+          const help = {
+            wordlist: "Full built-in dnsmap wordlist: 989 entries.",
+            concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
+            record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Only the selected types are queried.",
+          };
+          if (help[key]) {
+            const hint = el("p", help[key], "muted field-hint");
+            hint.id = `${id}-hint`;
+            input.setAttribute("aria-describedby", hint.id);
+            field.appendChild(hint);
+          }
           if (key === "resolve") field.appendChild(el("p", "Check discovered subdomains for A/AAAA records and add resolving names and their IPs to Assets. Names without addresses are recorded in the job artifact. Scope exclusions apply.", "muted field-hint"));
           if (property.type === "array") {
             field.appendChild(el("p", property.items?.enum ? `Options: ${property.items.enum.join(", ")}. One per line or separated by commas.`
@@ -1319,7 +1339,8 @@
           }
           fields.appendChild(field);
         }
-        append(section, fields, el("p", `Limits · ${Object.entries(task.limits).map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`).join(" · ")}`, "muted field-hint"));
+        section.appendChild(fields);
+        if (Object.keys(task.limits).length) section.appendChild(el("p", `Limits · ${Object.entries(task.limits).map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`).join(" · ")}`, "muted field-hint"));
         content.appendChild(section);
       }
     }
@@ -1344,7 +1365,7 @@
         if (schema.items?.type === "integer" && params[key].some((value) => !Number.isInteger(value) || value < 1 || value > 65535)) throw new Error("Enter valid TCP ports from 1 to 65535.");
       } else if (schema.type === "integer") {
         params[key] = Number(input.value);
-        if (!Number.isInteger(params[key]) || params[key] < (schema.minimum ?? 0) || (schema.maximum && params[key] > schema.maximum)) throw new Error(`Invalid ${scanFieldLabels[key] || key}.`);
+        if (!Number.isInteger(params[key]) || (schema.enum && !schema.enum.includes(params[key])) || params[key] < (schema.minimum ?? 0) || (schema.maximum && params[key] > schema.maximum)) throw new Error(`Invalid ${scanFieldLabels[key] || key}.`);
       } else params[key] = input.value.trim();
     }
     return params;

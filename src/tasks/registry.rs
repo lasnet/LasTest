@@ -56,7 +56,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
                 "sources":{"type":"array","items":{"type":"string"}},
                 "resolve":{"type":"boolean"}
             },"additionalProperties":false}),
-            limits: json!({"max_domains":50,"timeout_seconds":config.subfinder_timeout_seconds,"max_output_bytes":config.max_artifact_bytes}),
+            limits: json!({"timeout_seconds":config.subfinder_timeout_seconds,"max_output_bytes":config.max_artifact_bytes}),
             inputs: vec!["approved DNS scope or explicit domains"],
             outputs: vec![
                 "host observations",
@@ -80,7 +80,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
                 },
                 "additionalProperties": false
             }),
-            limits: json!({"max_domains": 50, "max_pages_per_domain": 10, "timeout_seconds": config.http_timeout_seconds}),
+            limits: json!({"max_pages_per_domain": 10, "timeout_seconds": config.http_timeout_seconds}),
             inputs: vec!["scope domains or explicit in-scope domains"],
             outputs: vec!["host observations", "issuance artifact"],
         },
@@ -106,22 +106,25 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
         },
         TaskTypeInfo {
             name: "dns.wordlist",
-            title: "DNS wordlist search with wildcard detection",
+            title: "DNS wordlist search with wildcard detection (dnsmap)",
             category: "recon",
             result_format_version: "1",
-            available: true,
-            unavailable_reason: None,
+            available: crate::tasks::dnsmap::available(config),
+            unavailable_reason: (!crate::tasks::dnsmap::available(config))
+                .then(|| "dnsmap is not installed or LASTEST_DNSMAP_PATH is not configured".into()),
             requires_explicit_scope: "domain",
             params_schema: json!({
                 "type": "object",
                 "properties": {
                     "domain": {"type": "string"},
+                    "wordlist": {"type": "string", "enum": ["default"], "default": "default"},
+                    "concurrency": {"type": "integer", "enum": [4,8,16], "default": 8},
                     "words": {"type": "array", "items": {"type": "string"}}
                 },
                 "required": ["domain"],
                 "additionalProperties": false
             }),
-            limits: json!({"max_words": config.max_wordlist_entries, "timeout_seconds": config.http_timeout_seconds}),
+            limits: json!({"timeout_seconds": config.dnsmap_timeout_seconds}),
             inputs: vec!["one in-scope domain"],
             outputs: vec!["host observations", "wildcard diagnostics"],
         },
@@ -315,7 +318,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
                 },
                 "additionalProperties": false
             }),
-            limits: json!({"max_domains": 50}),
+            limits: json!({}),
             inputs: vec!["in-scope domains/targets"],
             outputs: vec!["linked stage jobs"],
         },

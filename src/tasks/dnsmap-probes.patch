@@ -1,0 +1,53 @@
+--- a/src/dnsmap.c
++++ b/src/dnsmap.c
+@@ -239 +239 @@
+-		if(usesOpenDNS(invalidTldIpstr))
++		if(0 /* LasTest: no out-of-scope OpenDNS probe */)
+@@ -243 +243 @@
+-		wildcarDetect(argv[1],wildcardIpStr);
++		wildcardIpStr[0] = 0; /* LasTest handles wildcard checks */
+@@ -387 +387 @@
+-		if(usesOpenDNS(invalidTldIpstr))
++		if(0 /* LasTest: no out-of-scope OpenDNS probe */)
+@@ -391 +391 @@
+-		wildcarDetect(argv[1],wildcardIpStr);
++		wildcardIpStr[0] = 0; /* LasTest handles wildcard checks */
+@@ -713,38 +712,0 @@
+-        srand(time(NULL));
+-	max=rand()%20;
+-	// max should be between 10 and 20
+-	if(max<10)
+-		max=max+(10-max);
+-
+-	// generate up to random 20 digits-long subdomain
+-	// e.g. 06312580442146732554
+-
+-	for(i=0;i<max;++i) {
+-                n=rand()%10;
+-                sprintf(strTmp, "%d", n);
+-                if(i==0)
+-                        strncpy(s,strTmp,MAXSTRSIZE-strlen(s)-1);
+-                else
+-                        strncat(s,strTmp,MAXSTRSIZE-strlen(s)-1);
+-        }
+-	strncat(s,".",MAXSTRSIZE-strlen(s)-1);
+-	strncat(s, d,MAXSTRSIZE-strlen(s)-1);
+-	#if DEBUG
+-		printf("random subdomain for wildcard testing: %s\n",s);
+-	#endif
+-
+-	// some domains like proboards.com return more than 1 IP address
+-	// when resolving random subdomains (wildcards are enabled)
+-	h=gethostbyname(s);
+-        if(h) {
+-                for(j=0;h->h_addr_list[j];++j)
+-			inet_ntoa(*((struct in_addr *)h->h_addr_list[j]));
+-                if(j>1) {
+-                        #if DEBUG
+-
+-                                printf("wildcard domain\'s number of IP address(es): %d"
+-                                        " (this causes dnsmap to produce false positives)\n",j);
+-                        #endif
+-                        return FALSE;
+-                }
+-        }

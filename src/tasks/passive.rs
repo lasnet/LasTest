@@ -55,9 +55,6 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
     if domains.is_empty() {
         anyhow::bail!("no domains supplied and scope has no allowed DNS names");
     }
-    if domains.len() > 50 {
-        anyhow::bail!("subdomains.discover accepts at most 50 domains");
-    }
     let providers = if params.providers.is_empty() {
         vec!["certspotter".to_string()]
     } else {

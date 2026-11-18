@@ -86,6 +86,7 @@ echo "[5/9] approve scope for the API container host"
 docker exec -i "$API" sh -c 'cat > /tmp/rules.json' <<'JSON'
 [
   {"kind": "exact_domain", "value": "api.lastest.test"},
+  {"kind": "exact_domain", "value": "lastest.test"},
   {"kind": "cidr", "value": "172.16.0.0/12"}
 ]
 JSON
@@ -112,15 +113,38 @@ if [[ "$STATUS" != "succeeded" ]]; then
   exit 1
 fi
 
+echo "[6/9] run dnsmap against the isolated API's DNS alias"
+DNS_JOB_JSON="$(cli job submit --project "$PROJECT_ID" --task-type dns.wordlist \
+  --params '{"domain":"lastest.test","words":["api"],"concurrency":4}' \
+  --idempotency-key e2e-dnsmap-1)"
+DNS_JOB_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["id"])' <<<"$DNS_JOB_JSON")"
+DNS_STATUS="queued"
+for _ in $(seq 1 60); do
+  DNS_STATUS_JSON="$(cli job status --id "$DNS_JOB_ID")"
+  DNS_STATUS="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["status"])' <<<"$DNS_STATUS_JSON")"
+  if [[ "$DNS_STATUS" =~ ^(succeeded|partial|failed|cancelled)$ ]]; then break; fi
+  sleep 1
+done
+if [[ "$DNS_STATUS" != "succeeded" ]]; then
+  echo "dnsmap job finished with $DNS_STATUS" >&2
+  docker logs "$WORKER" >&2 || true
+  exit 1
+fi
+python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; r=j["result"]; assert r["engine"]=="dnsmap" and r["concurrency"]==4 and r["found"]==["api.lastest.test"]; assert j["artifacts"]' <<<"$DNS_STATUS_JSON"
+
 echo "[7/9] dashboard and report use persisted observations"
 cli report export --project "$PROJECT_ID" --format json --output /tmp/report.json
 docker exec "$API" sh -eu -c 'grep -q "e2e-stand" /tmp/report.json && grep -q "\"http\"" /tmp/report.json'
+docker exec "$API" sh -eu -c 'grep -q "dns.wordlist" /tmp/report.json && grep -q "api.lastest.test" /tmp/report.json'
 LOGIN_JSON="$(python3 -c 'import json,sys; print(json.dumps({"username":"admin","password":sys.stdin.read().rstrip("\n"),"client":"cli"}))' <<<"$PASSWORD" \
   | curl -fsS -X POST "${BASE}/api/auth/login" \
       -H 'Content-Type: application/json' --data @-)"
 TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"$LOGIN_JSON")"
 curl -fsS -H "Authorization: Bearer $TOKEN" \
   "${BASE}/api/projects/${PROJECT_ID}/dashboard" >/dev/null
+DNS_ARTIFACT_HREF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["artifacts"][0]["href"])' <<<"$DNS_STATUS_JSON")"
+curl -fsS -H "Authorization: Bearer $TOKEN" "${BASE}${DNS_ARTIFACT_HREF}" \
+  | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["format_version"]=="1" and r["engine"]=="dnsmap" and r["found"]==["api.lastest.test"]'
 
 echo "[8/9] restart both processes and verify history survives"
 docker restart "$WORKER" >/dev/null
@@ -128,10 +152,11 @@ docker restart "$API" >/dev/null
 wait_ready
 PERSISTED="$(cli job status --id "$JOB_ID")"
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["job"]["status"]=="succeeded"' <<<"$PERSISTED"
+cli job status --id "$DNS_JOB_ID" | python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; assert j["status"]=="succeeded" and j["result"]["found"]==["api.lastest.test"]'
 
 echo "[9/9] verify runtime excludes Go/Python/compilers and uses a non-root user"
 docker run --rm --entrypoint /usr/local/bin/subfinder "$LASTEST_IMAGE" -version
-cli task-types | python3 -c 'import json,sys; items=json.load(sys.stdin)["task_types"]; assert any(item["name"]=="subdomains.subfinder" and item["available"] for item in items)'
+cli task-types | python3 -c 'import json,sys; items=json.load(sys.stdin)["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"])'
 docker run --rm --entrypoint sh "$LASTEST_IMAGE" -eu -c \
   '! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'
 IMAGE_USER="$(docker image inspect --format '{{.Config.User}}' "$LASTEST_IMAGE")"

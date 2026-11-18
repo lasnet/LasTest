@@ -11,6 +11,32 @@ use support::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+fn fake_dnsmap(home: &std::path::Path) -> std::path::PathBuf {
+    let path = home.join("dnsmap");
+    std::fs::write(
+        &path,
+        r#"#!/bin/sh
+set -eu
+domain=$1
+[ "$2" = '-w' ]
+[ "$4" = '-d' ]
+[ "$5" = '1' ]
+events="$(dirname "$0")/events"
+printf 'start\n' >> "$events"
+sleep 0.2
+while IFS= read -r word; do
+  printf '%s.%s\n' "$word" "$domain"
+  printf '%s.%s\n' "$word" "$domain" >> "$(dirname "$0")/candidates"
+done < "$3"
+printf 'outside.test\nunlisted.allowed.test\n'
+printf 'end\n' >> "$events"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
 #[tokio::test]
 async fn local_dns_records_and_wildcard_wordlist() {
     let env = TestEnv::new();
@@ -27,6 +53,7 @@ async fn local_dns_records_and_wildcard_wordlist() {
     .await;
     let mut config = env.config.clone();
     config.dns_server = Some(dns.addr.to_string());
+    config.dnsmap_path = Some(fake_dnsmap(env.temp.path()));
     let scope = Scope::new(scope_rules(&[
         ("tree", "allowed.test"),
         ("cidr", "203.0.113.0/24"),
@@ -686,4 +713,204 @@ async fn subfinder_validates_exact_seed_children_and_keeps_only_resolving_assets
         .unwrap();
     assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 4);
     assert!(outcome.observations.iter().all(|item| item.kind == "host"));
+}
+
+#[tokio::test]
+async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
+    use lastest::tasks::{dnsmap, validate_submission};
+    let env = TestEnv::new();
+    let path = fake_dnsmap(env.temp.path());
+    let dns = spawn_dns_server(|name, qtype| match (name, qtype) {
+        ("h0.allowed.test", 1) => vec![vec![203, 0, 113, 10]],
+        ("h1.allowed.test", 28) => {
+            vec![vec![0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]]
+        }
+        _ => Vec::new(),
+    })
+    .await;
+    let mut rules = scope_rules(&[("exact", "allowed.test")]);
+    rules.push(
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::ExactDomain,
+            "excluded.allowed.test",
+            true,
+        )
+        .unwrap(),
+    );
+    let mut ctx = task_context(&env, Scope::new(rules).unwrap(), "dnsmap-test");
+    ctx.config.dnsmap_path = Some(path);
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    ctx.config.max_wordlist_entries = 1;
+    let words: Vec<_> = (0..32)
+        .map(|i| format!("h{i}"))
+        .chain(["excluded".into()])
+        .collect();
+    for concurrency in [4, 8, 16] {
+        std::fs::write(env.temp.path().join("events"), "").unwrap();
+        std::fs::write(env.temp.path().join("candidates"), "").unwrap();
+        let job = make_job(
+            "dns.wordlist",
+            json!({"domain":"allowed.test", "words":words, "concurrency":concurrency}),
+        );
+        validate_submission(&job.task_type, &job.params, &ctx.config).unwrap();
+        let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
+        assert_eq!(
+            outcome.result["found"],
+            json!(["h0.allowed.test", "h1.allowed.test"])
+        );
+        assert_eq!(outcome.result["concurrency"], concurrency);
+        assert_eq!(outcome.result["engine"], "dnsmap");
+        assert_eq!(outcome.result["searched"], 33);
+        assert_eq!(outcome.artifacts.len(), 1);
+        assert!(outcome
+            .observations
+            .iter()
+            .any(|o| o.asset == "2001:db8::1"));
+        let mut active = 0;
+        let mut peak = 0;
+        let events = std::fs::read_to_string(env.temp.path().join("events")).unwrap();
+        for event in events.lines() {
+            if event == "start" {
+                active += 1;
+                peak = peak.max(active);
+            } else {
+                active -= 1;
+            }
+        }
+        assert_eq!(active, 0);
+        assert_eq!(peak, concurrency);
+        let candidates = std::fs::read_to_string(env.temp.path().join("candidates")).unwrap();
+        assert_eq!(candidates.lines().count(), 32);
+        assert!(!candidates.contains("excluded"));
+        assert!(!dns
+            .queries
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, _)| name == "excluded.allowed.test"));
+    }
+    for params in [
+        json!({"domain":"allowed.test", "concurrency":3}),
+        json!({"domain":"allowed.test", "concurrency":"8"}),
+        json!({"domain":"allowed.test", "wordlist":"../../etc/passwd"}),
+        json!({"domain":"allowed.test", "words":["bad\nword"]}),
+        json!({"domain":"allowed.test", "words":["-x"]}),
+    ] {
+        assert!(validate_submission("dns.wordlist", &params, &ctx.config).is_err());
+    }
+    let many: Vec<_> = (0..5001).map(|i| format!("h{i}")).collect();
+    validate_submission(
+        "dns.wordlist",
+        &json!({"domain":"allowed.test", "words":many}),
+        &ctx.config,
+    )
+    .unwrap();
+    let params: dnsmap::WordlistParams =
+        serde_json::from_value(json!({"domain":"allowed.test"})).unwrap();
+    assert_eq!(dnsmap::words(&params).len(), 989);
+    assert_eq!(params.concurrency, 8);
+    let task = lastest::tasks::registry::task_types(&ctx.config)
+        .into_iter()
+        .find(|t| t.name == "dns.wordlist")
+        .unwrap();
+    assert!(task.available);
+    assert!(task.limits.get("max_words").is_none());
+    let job = make_job(
+        "dns.wordlist",
+        json!({"domain":"allowed.test", "wordlist":"default"}),
+    );
+    let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.result["searched"], 989);
+    assert_eq!(outcome.result["wordlist"], "default");
+}
+
+#[tokio::test]
+async fn dnsmap_stops_children_on_timeout_cancel_scope_change_and_output_overflow() {
+    use lastest::tasks::dnsmap;
+    let env = TestEnv::new();
+    let path = fake_dnsmap(env.temp.path());
+    std::fs::write(&path, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
+        "dnsmap-cancel",
+    );
+    ctx.config.dnsmap_path = Some(path.clone());
+    ctx.config.dnsmap_timeout_seconds = 1;
+    let params: dnsmap::WordlistParams =
+        serde_json::from_value(json!({"domain":"allowed.test", "words":["www"]})).unwrap();
+    let words = dnsmap::words(&params);
+    let error = dnsmap::discover(&params, &words, &ctx).await.unwrap_err();
+    assert!(error.to_string().contains("timeout"));
+    ctx.config.dnsmap_timeout_seconds = 30;
+    let cancel = ctx.cancel.clone();
+    let work = dnsmap::discover(&params, &words, &ctx);
+    let trigger = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    };
+    let (result, _) = tokio::join!(work, trigger);
+    assert!(result.unwrap_err().is::<lastest::tasks::TaskCancelled>());
+    ctx.cancel
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let work = dnsmap::discover(&params, &words, &ctx);
+    let trigger = async {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let mut scope = ctx.current_scope().unwrap();
+        scope.rules.push(
+            lastest::scope::ScopeRule::new(
+                lastest::scope::RuleKind::ExactDomain,
+                "www.allowed.test",
+                true,
+            )
+            .unwrap(),
+        );
+        ctx.db
+            .replace_scope(&ctx.project_id, None, &scope, "revoke", "admin", true)
+            .unwrap();
+    };
+    let (result, _) = tokio::join!(work, trigger);
+    assert!(result.unwrap_err().to_string().contains("scope changed"));
+    std::fs::write(&path, "#!/bin/sh\nwhile :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; done\n").unwrap();
+    ctx.config.max_artifact_bytes = 128;
+    let params: dnsmap::WordlistParams =
+        serde_json::from_value(json!({"domain":"allowed.test", "words":["api"]})).unwrap();
+    let error = dnsmap::discover(&params, &dnsmap::words(&params), &ctx)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("artifact limit"));
+    assert_eq!(
+        std::fs::read_dir(ctx.config.tmp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("dnsmap-"))
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn subdomain_tasks_accept_more_than_fifty_domains() {
+    let env = TestEnv::new();
+    let server = spawn_http_server(|_| HttpResponse::new(200, "[]")).await;
+    let domains: Vec<_> = (0..51).map(|i| format!("d{i}.allowed.test")).collect();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
+        "many-domains",
+    );
+    ctx.config.certspotter_url = format!("http://127.0.0.1:{}/ct", server.addr.port());
+    ctx.config.subfinder_path = Some("/usr/bin/true".into());
+    let job = make_job("subdomains.discover", json!({"domains":domains}));
+    let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.counters.processed, 51);
+    let job = make_job(
+        "subdomains.subfinder",
+        json!({"domains":domains,"resolve":false}),
+    );
+    let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.counters.processed, 51);
+    assert!(lastest::tasks::registry::task_types(&ctx.config)
+        .iter()
+        .all(|t| t.limits.get("max_domains").is_none()));
 }

@@ -59,3 +59,7 @@ nmap_max_output_bytes = 4194304
 # password = ""
 
 log_level = "info"
+
+# DNS wordlist engine (included in Docker); max_wordlist_entries applies to HTTP paths only.
+# dnsmap_path = "/usr/local/bin/dnsmap"
+dnsmap_timeout_seconds = 600

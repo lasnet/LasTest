@@ -674,7 +674,7 @@ dialog .button-row { justify-content: flex-end; }
 .scan-task-settings { min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--rule); border-radius: 9px; }
 .scan-task-settings legend { max-width: 100%; padding: 0 6px; }
 .scan-task-settings .checkbox { display: flex; align-items: center; gap: 8px; }
-.scan-task-settings input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; padding: 0; flex: none; }
+.scan-task-settings input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; margin: 0; padding: 0; flex: none; }
 .scan-task-fields { display: grid; gap: 12px; margin: 9px 0; }
 .scan-task-settings .field-hint { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .scan-planned { padding-top: 12px; border-top: 1px solid var(--rule); }

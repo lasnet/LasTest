@@ -1,6 +1,7 @@
 //! Typed task registry and bounded task implementations.
 
 pub mod dns_tasks;
+pub mod dnsmap;
 pub mod http_tasks;
 pub mod network;
 pub mod nmap;
@@ -368,18 +369,7 @@ pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> 
                 crate::net::dns::record_type(&record_type)?;
             }
         }
-        "dns.wordlist" => {
-            ensure_keys(params, &["domain", "words"])?;
-            let domain = params
-                .get("domain")
-                .and_then(Value::as_str)
-                .context("dns.wordlist requires a domain string")?;
-            normalize_domain(domain)?;
-            let words = string_list(params, "words")?;
-            if words.len() > config.max_wordlist_entries {
-                anyhow::bail!("dns.wordlist exceeds the configured word limit");
-            }
-        }
+        "dns.wordlist" => dnsmap::validate(params, config)?,
         "reverse.ip" => {
             ensure_keys(params, &["ips", "providers"])?;
             let ips = string_list(params, "ips")?;
