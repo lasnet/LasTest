@@ -445,7 +445,9 @@
         if (column === "Type") return scopeTypes[rule.kind];
         if (column === "Value") return rule.value;
         if (column === "Effect") return el("span", rule.exclusion ? "exclude" : "allow", rule.exclusion ? "badge bad" : "badge ok");
-        const button = el("button", "Remove", "link");
+        const button = el("button", "−", "secondary record-remove");
+        button.setAttribute("aria-label", `Remove ${rule.value}`);
+        button.title = `Remove ${rule.value}`;
         button.type = "button";
         button.disabled = state.scopeSaving || state.me?.role === "viewer";
         button.addEventListener("click", () => {
@@ -469,14 +471,14 @@
       history.appendChild(el("p", "No project selected.", "empty"));
     } else {
       history.appendChild(table(
-        ["Version", "Status", "Created", "Approved"],
+        ["Version", "Status", "Created", "Note"],
         state.scopeHistory || [],
         (revision, column) => {
           const map = {
             Version: revision.version,
             Status: revision.status,
             Created: revision.created_at,
-            Approved: revision.approved_at || "",
+            Note: revision.note || "—",
           };
           return map[column] ?? "";
         },

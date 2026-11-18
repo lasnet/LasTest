@@ -259,12 +259,14 @@
               </select>
             </div>
             <div class="field">
-              <label for="rule-value">Value</label>
+              <div class="rule-value-heading">
+                <label for="rule-value">Value</label>
+                <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
+              </div>
               <input id="rule-value" placeholder="example.com" aria-describedby="rule-value-hint" autocomplete="off" spellcheck="false">
-              <p id="rule-value-hint" class="muted field-hint">DNS name, for example example.com.</p>
+              <p id="rule-value-hint" class="visually-hidden">DNS name, for example example.com.</p>
             </div>
-            <label class="checkbox"><input id="rule-exclusion" type="checkbox"> Exclusion</label>
-            <button id="add-rule-button" class="secondary">Add rule</button>
+            <button id="add-rule-button" class="secondary"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg>Add rule</button>
           </div>
           <div class="scope-save-row">
             <div class="field scope-note">
@@ -272,8 +274,8 @@
               <input id="scope-note" placeholder="Why this revision changed (optional)">
             </div>
             <div class="button-row scope-actions">
-              <button id="cancel-scope-button" class="secondary">Cancel changes</button>
-              <button id="save-approve-scope-button" class="primary">Save changes</button>
+              <button id="cancel-scope-button" class="primary">Cancel changes</button>
+              <button id="save-approve-scope-button" class="secondary">Save changes</button>
             </div>
           </div>
           <p id="scope-error" class="error" role="alert"></p>

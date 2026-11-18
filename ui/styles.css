@@ -104,6 +104,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
 
 html, body { min-height: 100%; margin: 0; }
 body {
@@ -450,13 +451,21 @@ tbody tr:hover { background: var(--canvas); }
 
 .rule-editor {
   display: grid;
-  grid-template-columns: minmax(140px, 238px) minmax(120px, 1fr) auto auto;
-  align-items: start;
-  gap: 10px;
+  grid-template-columns: minmax(140px, 196px) minmax(220px, 270px) auto;
+  align-items: end;
+  justify-content: start;
+  gap: 26px;
   margin: 14px 0;
+  padding: 8px 11px 11px;
+  border: 1px solid var(--control);
+  border-radius: var(--control-radius);
+  background: var(--frame);
 }
-.rule-editor .checkbox { display: flex; align-items: center; gap: 6px; min-height: 39px; padding-inline: 5px; }
-.rule-editor > .checkbox, .rule-editor > button { margin-top: 25px; }
+.rule-value-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rule-editor .checkbox { display: flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 400; }
+.rule-editor :is(input:not([type="checkbox"]), select, button) { min-height: 42px; }
+.rule-editor #add-rule-button:not(:disabled) { background: color-mix(in srgb, #63bcff 48%, var(--paper)); color: var(--ink); }
+.rule-editor #add-rule-button:hover:not(:disabled) { background: color-mix(in srgb, #63bcff 60%, var(--paper)); }
 .rule-editor input[type="checkbox"] { width: 16px; min-height: auto; height: 16px; margin: 0; }
 
 .job-list { display: grid; }
@@ -552,23 +561,35 @@ tbody tr:hover { background: var(--canvas); }
 /* Scope records use a bounded list so editing controls stay close to the data. */
 .records-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .records-heading p { margin-top: 7px; }
-#scope-search { width: 230px; flex-shrink: 0; }
+#scope-search { width: min(313px, 40%); flex-shrink: 0; }
 #scope-rules .table-wrap { max-height: 258px; overflow: auto; scrollbar-gutter: stable; }
 #scope-rules table { table-layout: fixed; }
 #scope-rules th { position: sticky; top: 0; z-index: 1; }
-#scope-rules th:nth-child(1) { width: 23%; }
-#scope-rules th:nth-child(2) { width: 49%; }
+#scope-rules th:nth-child(1) { width: 20%; }
+#scope-rules th:nth-child(2) { width: 56%; }
 #scope-rules th:nth-child(3) { width: 15%; }
-#scope-rules th:last-child { width: 100px; }
+#scope-rules th:last-child { width: 60px; }
 #scope-rules td { height: 44px; }
 #scope-rules td:nth-child(2) { overflow-wrap: anywhere; }
+#scope-rules td:last-child { text-align: right; }
 #scope-rules .record-pending { background: var(--info-surface); }
 #scope-rules .record-pending:hover { background: var(--info-surface); }
 #scope-rules button { min-height: 28px; }
+#scope-rules .record-remove { width: 30px; height: 30px; padding: 0; font-size: 21px; font-weight: 400; color: var(--muted); }
 .scope-save-row { display: flex; align-items: end; gap: 16px; }
 .scope-note { flex: 1; min-width: 0; }
-.scope-actions { flex: none; justify-content: flex-end; margin: 0; flex-wrap: nowrap; }
-.scope-actions button { min-width: 110px; }
+.scope-actions { flex: none; justify-content: flex-end; margin: 0; flex-wrap: nowrap; gap: 20px; }
+.scope-actions button { min-width: 104px; }
+#cancel-scope-button { min-width: 144px; }
+.scope-save-row { padding-inline: 11px; gap: 22px; }
+.scope-save-row :is(input, button) { min-height: 42px; }
+#scope-history th:nth-child(1) { width: 18%; }
+#scope-history th:nth-child(2) { width: 28%; }
+#scope-history th:nth-child(3) { width: 31%; }
+#scope-history td:last-child { overflow-wrap: anywhere; }
+@media (min-width: 701px) {
+  #scope-history .table-time span { display: inline; margin-left: 3px; }
+}
 .notice {
   position: fixed;
   top: 26px;
@@ -607,7 +628,7 @@ dialog .button-row { justify-content: flex-end; }
   .scope-save-row { flex-wrap: wrap; gap: 12px; }
   .scope-note { flex-basis: 100%; }
   .scope-actions { width: 100%; }
-  .scope-actions button { flex: 1; }
+  .scope-actions button, .scope-actions #cancel-scope-button { flex: 1; min-width: 0; }
 }
 
 .scans-layout { grid-template-columns: minmax(0, 1.42fr) minmax(0, 1fr); align-items: start; }
