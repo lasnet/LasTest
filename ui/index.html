@@ -311,8 +311,21 @@
       </section>
 
       <section data-view="assets" class="view" hidden aria-labelledby="assets-title">
-        <section class="panel"><h2>Hosts</h2><div id="assets-hosts"></div></section>
-        <section class="panel"><h2>IP addresses</h2><div id="assets-ips"></div></section>
+        <section class="panel">
+          <h2>Hosts and IP addresses</h2>
+          <div class="assets-toolbar">
+            <div class="field"><label for="assets-search">Search hosts or IP addresses</label><input id="assets-search" type="search" placeholder="Host or IP address" autocomplete="off"></div>
+            <div class="button-row"><button id="assets-export-txt" type="button">Export TXT</button><button id="assets-export-csv" type="button">Export CSV</button></div>
+          </div>
+          <p class="muted">Exports include all matching rows across every page. IP addresses without a linked host appear separately.</p>
+          <p id="assets-error" class="error" role="alert"></p>
+          <div id="assets-inventory" aria-live="polite"></div>
+          <nav class="assets-pagination" aria-label="Asset pages">
+            <button id="assets-previous" type="button">Previous</button>
+            <span id="assets-page-status" role="status"></span>
+            <button id="assets-next" type="button">Next</button>
+          </nav>
+        </section>
         <section class="panel"><h2>URLs</h2><div id="assets-urls"></div></section>
       </section>
 
@@ -365,6 +378,17 @@
       <div class="button-row">
         <button value="keep" autofocus>Keep editing</button>
         <button value="discard" class="primary">Discard changes</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="delete-asset-dialog" aria-labelledby="delete-asset-title" aria-describedby="delete-asset-description">
+    <form id="delete-asset-form">
+      <h2 id="delete-asset-title">Delete asset?</h2>
+      <p id="delete-asset-description"></p>
+      <p id="delete-asset-error" class="error" role="alert"></p>
+      <div class="button-row">
+        <button id="cancel-delete-asset" type="button" autofocus>Cancel</button>
+        <button id="confirm-delete-asset" type="submit" class="danger">Delete</button>
       </div>
     </form>
   </dialog>

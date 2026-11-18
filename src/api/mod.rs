@@ -1,6 +1,7 @@
 //! HTTP API. Web and CLI use the same routes and authorization checks.
 
 pub mod admin;
+pub mod assets;
 pub mod auth_routes;
 pub mod dashboard;
 pub mod jobs;
@@ -258,6 +259,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/chains/{id}", get(jobs::get_chain))
         .route("/api/chains/{id}/cancel", post(jobs::cancel_chain))
         .route("/api/projects/{id}/dashboard", get(dashboard::dashboard))
+        .route("/api/projects/{id}/assets", get(assets::list))
+        .route(
+            "/api/projects/{id}/assets/export/{format}",
+            get(assets::export),
+        )
+        .route(
+            "/api/projects/{id}/assets/{asset_id}",
+            axum::routing::delete(assets::delete),
+        )
         .route("/api/evidence/{id}", get(jobs::get_evidence))
         .route(
             "/api/projects/{id}/reports/{format}",

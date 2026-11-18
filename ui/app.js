@@ -7,6 +7,13 @@
     projectId: "",
     project: null,
     dashboard: null,
+    assets: null,
+    assetsQuery: "",
+    assetsOffset: 0,
+    assetsLoading: false,
+    assetsRequest: 0,
+    deleteAsset: null,
+    assetDeleting: false,
     scope: null,
     scopeHistory: [],
     rules: [],
@@ -294,6 +301,13 @@
 
   async function selectProject(id) {
     state.projectId = id;
+    state.assets = null;
+    state.assetsQuery = "";
+    state.assetsOffset = 0;
+    state.assetsRequest++;
+    state.assetsLoading = false;
+    clearTimeout(assetsSearchTimer);
+    $("#assets-search").value = "";
     selectedModules.clear();
     scanParams.clear();
     rememberProject();
@@ -364,7 +378,7 @@
     }
   }
 
-  async function loadDashboard() {
+  async function loadDashboard(refreshAssets = true) {
     if (!requireProject()) return;
     const projectId = state.projectId;
     const value = await api(`/api/projects/${encodeURIComponent(projectId)}/dashboard`);
@@ -373,6 +387,7 @@
     renderDashboard();
     renderAssets();
     renderFindings();
+    if (refreshAssets && state.view === "assets") await loadAssets();
   }
 
   async function loadScope() {
@@ -680,22 +695,91 @@
     }));
   }
 
-  function renderAssets() {
-    const dashboard = state.dashboard;
-    for (const [id, key, columns] of [
-      ["#assets-hosts", "hosts", ["Value", "First seen", "Last seen"]],
-      ["#assets-ips", "ips", ["Value", "First seen", "Last seen"]],
-      ["#assets-urls", "urls", ["Value", "First seen", "Last seen"]],
-    ]) {
-      const node = $(id);
-      clear(node);
-      if (!state.projectId) { node.appendChild(el("p", "Select a project.", "empty")); continue; }
-      node.appendChild(table(columns, dashboard?.assets?.[key] || [], (row, column) => {
-        if (column === "Value") return row.value;
-        if (column === "First seen") return row.first_seen;
-        return row.last_seen;
-      }));
+  async function loadAssets() {
+    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const request = ++state.assetsRequest;
+    const params = new URLSearchParams({ q: state.assetsQuery, offset: state.assetsOffset });
+    state.assetsLoading = true;
+    $("#assets-error").textContent = "";
+    renderAssets();
+    try {
+      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/assets?${params}`);
+      if (request !== state.assetsRequest || projectId !== state.projectId) return;
+      state.assets = value;
+      state.assetsOffset = value.offset;
+    } catch (error) {
+      if (request !== state.assetsRequest || projectId !== state.projectId) return;
+      state.assets = null;
+      $("#assets-error").textContent = error.message;
+    } finally {
+      if (request === state.assetsRequest && projectId === state.projectId) {
+        state.assetsLoading = false;
+        renderAssets();
+      }
     }
+  }
+
+  function renderAssets() {
+    const node = $("#assets-inventory");
+    clear(node);
+    const data = state.assets;
+    $("#assets-search").disabled = !state.projectId;
+    if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
+    else if (state.assetsLoading) node.appendChild(el("p", "Loading assets…", "empty"));
+    else node.appendChild(table(["Hosts", "IP addresses", "Last seen", "Actions"], data?.items || [], (row, column) => {
+      if (column === "Hosts") return row.host;
+      if (column === "IP addresses") {
+        const addresses = el("div");
+        for (const ip of row.ips) addresses.appendChild(el("div", ip));
+        return addresses;
+      }
+      if (column === "Last seen") return row.last_seen;
+      const button = el("button", "×", "icon-button asset-delete");
+      button.type = "button";
+      const label = row.host || row.ips.join(", ");
+      button.setAttribute("aria-label", `Delete ${label}`);
+      button.title = state.me?.role === "viewer" ? "Analyst permission required" : `Delete ${label}`;
+      button.disabled = state.me?.role === "viewer" || state.assetDeleting;
+      button.addEventListener("click", () => {
+        state.deleteAsset = { ...row, projectId: state.projectId };
+        $("#delete-asset-error").textContent = "";
+        $("#delete-asset-description").textContent = row.kind === "host"
+          ? `Delete ${label}, its URL records, observations and findings from this project? IP address records will be kept, including shared IPs. Job history and evidence files remain. Future scans may discover this host again.`
+          : `Delete ${label} and its observations and findings from this project? Job history and evidence files remain. Future scans may discover this IP again.`;
+        $("#delete-asset-dialog").showModal();
+      });
+      return button;
+    }));
+    const total = data?.total || 0;
+    const disabled = !state.projectId || !data || state.assetsLoading;
+    $("#assets-previous").disabled = disabled || state.assetsOffset === 0;
+    $("#assets-next").disabled = disabled || state.assetsOffset + 10 >= total;
+    $("#assets-page-status").textContent = state.assetsLoading ? "Loading…" : total
+      ? `${state.assetsOffset + 1}–${Math.min(state.assetsOffset + 10, total)} of ${total} · Page ${state.assetsOffset / 10 + 1} of ${Math.ceil(total / 10)}` : "0 records";
+    for (const format of ["txt", "csv"]) $("#assets-export-" + format).disabled = disabled || total === 0;
+    const urls = $("#assets-urls");
+    clear(urls);
+    urls.appendChild(table(["Value", "Last seen"], state.dashboard?.assets?.urls || [], (row, column) => column === "Value" ? row.value : row.last_seen));
+  }
+
+  async function downloadAssets(format) {
+    if (!requireProject()) return;
+    const projectId = state.projectId;
+    const name = state.project?.name || "project";
+    try {
+      const params = new URLSearchParams({ q: state.assetsQuery });
+      const blob = await apiBytes(`/api/projects/${encodeURIComponent(projectId)}/assets/export/${format}?${params}`);
+      const url = URL.createObjectURL(blob);
+      const link = el("a");
+      link.href = url;
+      link.download = `${name}-assets.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notice(`Exported ${format.toUpperCase()} assets.`, "info");
+    } catch (error) { notice(error.message, "error"); }
   }
 
   function renderFindings() {
@@ -1363,6 +1447,50 @@
 
   $("#export-json-button").addEventListener("click", () => downloadReport("json"));
   $("#export-csv-button").addEventListener("click", () => downloadReport("csv"));
+
+  let assetsSearchTimer;
+  $("#assets-search").addEventListener("input", (event) => {
+    state.assetsQuery = event.target.value;
+    state.assetsOffset = 0;
+    state.assetsRequest++;
+    state.assetsLoading = true;
+    renderAssets();
+    clearTimeout(assetsSearchTimer);
+    assetsSearchTimer = setTimeout(loadAssets, 200);
+  });
+  $("#assets-previous").addEventListener("click", () => { state.assetsOffset = Math.max(0, state.assetsOffset - 10); loadAssets(); });
+  $("#assets-next").addEventListener("click", () => { state.assetsOffset += 10; loadAssets(); });
+  for (const format of ["txt", "csv"]) $("#assets-export-" + format).addEventListener("click", () => downloadAssets(format));
+  $("#cancel-delete-asset").addEventListener("click", () => $("#delete-asset-dialog").close());
+  $("#delete-asset-dialog").addEventListener("cancel", (event) => { if (state.assetDeleting) event.preventDefault(); });
+  $("#delete-asset-dialog").addEventListener("close", () => { state.deleteAsset = null; });
+  $("#delete-asset-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const row = state.deleteAsset;
+    if (!row || state.assetDeleting) return;
+    state.assetDeleting = true;
+    $("#confirm-delete-asset").disabled = true;
+    $("#cancel-delete-asset").disabled = true;
+    $("#delete-asset-error").textContent = "";
+    try {
+      await api(`/api/projects/${encodeURIComponent(row.projectId)}/assets/${encodeURIComponent(row.id)}`, { method: "DELETE" });
+      $("#delete-asset-dialog").close();
+      if (row.projectId === state.projectId) {
+        await loadAssets();
+        await loadDashboard(false);
+      }
+      notice(row.kind === "host" ? "Host deleted. IP records are preserved." : "IP address deleted.", "info");
+    } catch (error) {
+      if ($("#delete-asset-dialog").open) $("#delete-asset-error").textContent = error.message;
+      else notice(`Asset deleted, but the view could not be refreshed: ${error.message}`, "error");
+    }
+    finally {
+      state.assetDeleting = false;
+      $("#confirm-delete-asset").disabled = false;
+      $("#cancel-delete-asset").disabled = false;
+      renderAssets();
+    }
+  });
 
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", () => {

@@ -159,6 +159,13 @@ button.primary:hover:not(:disabled) { border-color: var(--accent-hover); backgro
 button.link { min-height: 32px; padding: 3px 6px; border-color: transparent; color: var(--accent); }
 button.icon-button { width: 34px; min-height: 34px; padding: 0; border-color: transparent; color: var(--muted); }
 .button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+.assets-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-bottom: 12px; }
+.assets-toolbar .field { flex: 1 1 240px; }
+.assets-toolbar .button-row { margin-top: 0; }
+.assets-pagination { display: flex; flex-wrap: wrap; justify-content: end; align-items: center; gap: 12px; margin-top: 16px; }
+button.danger:not(:disabled), button.asset-delete:not(:disabled) { color: var(--danger); }
+button.danger:hover:not(:disabled), button.asset-delete:hover:not(:disabled) { background: var(--danger-surface); border-color: var(--danger); }
+#assets-inventory td:first-child { overflow-wrap: anywhere; }
 
 form, .field { display: grid; min-width: 0; }
 form { gap: 14px; }
