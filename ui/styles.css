@@ -610,10 +610,12 @@ dialog .button-row { justify-content: flex-end; }
   .scope-actions button { flex: 1; }
 }
 
+.scans-layout { grid-template-columns: minmax(0, 1.42fr) minmax(0, 1fr); align-items: start; }
+.scan-selector { container: scan-selector / inline-size; }
 .scan-selector > h2 { font-size: 21px; }
 .scan-family { margin-top: 20px; padding: 15px; border: 1px solid var(--control); border-radius: var(--radius); }
 .scan-family > h2 { margin-bottom: 12px; font-size: 18px; }
-.scan-module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.scan-module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(10px, 3cqw, 22px); }
 .scan-module { position: relative; min-width: 0; border: 1px solid var(--control); border-radius: 10px; background: var(--scan-surface); color: var(--ink); }
 .scan-tone-green { --scan-surface: #f3fced; }
 .scan-tone-yellow { --scan-surface: #fdf9ec; }
@@ -627,13 +629,13 @@ dialog .button-row { justify-content: flex-end; }
 .scan-module-tools { position: absolute; left: 8px; top: 7px; z-index: 1; display: flex; gap: 2px; }
 .scan-card-action { width: 26px; min-height: 26px; padding: 2px; border: none; background: transparent; color: var(--ink); }
 .scan-card-action .icon { width: 23px; height: 23px; stroke-width: 1.5; }
-.scan-module-choice { display: flex; flex-direction: column; justify-content: end; min-height: 160px; padding: 41px 11px 13px; cursor: pointer; }
+.scan-module-choice { display: flex; flex-direction: column; justify-content: end; min-height: clamp(110px, 24cqw, 160px); padding: 41px 11px 13px; cursor: pointer; }
 .scan-module-choice input[type="checkbox"] { position: absolute; top: 8px; right: 8px; appearance: none; width: 24px; height: 24px; min-height: 24px; margin: 0; padding: 0; border: 2px solid var(--control); border-radius: 50%; background: var(--paper); cursor: pointer; }
 .scan-module-choice input:checked { border: 7px solid var(--accent); }
 .scan-module-choice:has(input:disabled) { cursor: default; }
 .scan-module-choice input:disabled { cursor: not-allowed; background: var(--disabled-surface); }
-.scan-module-title { display: block; white-space: pre-line; max-width: 11ch; font-size: clamp(25px, 2.4vw, 35px); font-weight: 600; letter-spacing: -.035em; line-height: .98; overflow-wrap: normal; }
-.scan-module-mode { margin-top: 7px; font-size: 15px; font-weight: 500; }
+.scan-module-title { display: block; white-space: pre-line; max-width: 11ch; font-size: clamp(20px, 4cqw, 35px); font-weight: 600; letter-spacing: -.035em; line-height: .98; overflow-wrap: normal; }
+.scan-module-mode { margin-top: 7px; font-size: clamp(12px, 2.5cqw, 15px); font-weight: 500; }
 .scan-launch { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 20px; }
 .scan-launch .primary { min-height: 44px; padding: 10px 16px; font-size: 15px; }
 #scan-module-dialog { width: min(740px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); overflow-y: auto; }
@@ -648,7 +650,11 @@ dialog .button-row { justify-content: flex-end; }
 .scan-task-settings .field-hint { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .scan-planned { padding-top: 12px; border-top: 1px solid var(--rule); }
 @media (max-width: 1100px) {
+  .scans-layout { grid-template-columns: minmax(0, 1fr); }
   .scan-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+}
+@container scan-selector (max-width: 560px) {
+  .scan-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 520px) {
   .scan-family { padding: 10px; }
