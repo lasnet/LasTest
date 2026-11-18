@@ -1122,13 +1122,35 @@
     max_depth: "Maximum depth", proxy_profile: "SOCKS5 profile", cookie_names: "Session cookie names", limit: "Maximum URLs",
   };
 
+  const scanTargetFields = new Set(["domains", "domain", "targets", "ips", "seeds", "base_urls"]);
+
+  function scopeScanDomains() {
+    const rules = state.scope?.rules || [];
+    return [...new Set(rules.filter((rule) => !rule.exclusion && ["exact_domain", "subdomain_tree"].includes(rule.kind)
+      && !rules.some((excluded) => excluded.exclusion && (excluded.kind === "exact_domain" ? excluded.value === rule.value
+        : excluded.kind === "subdomain_tree" && (rule.value === excluded.value || rule.value.endsWith(`.${excluded.value}`)))))
+      .map((rule) => rule.value))];
+  }
+
+  function scopeScanIps() {
+    const rules = state.scope?.rules || [];
+    return [...new Set(rules.filter((rule) => rule.kind === "ip" && !rule.exclusion
+      && !rules.some((excluded) => excluded.kind === "ip" && excluded.exclusion && excluded.value === rule.value))
+      .map((rule) => rule.value))];
+  }
+
+  function hiddenScanField(task, key) {
+    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && key === "sources");
+  }
+
   function defaultScanParams(task) {
-    const params = { ...(scanParams.get(task.name) || {}) };
-    if (task.params_schema.required?.includes("ips") && !params.ips) {
-      params.ips = (state.scope?.rules || []).filter((rule) => rule.kind === "ip" && !rule.exclusion).map((rule) => rule.value);
-    }
-    if (task.params_schema.required?.includes("domain") && !params.domain) {
-      params.domain = (state.scope?.rules || []).find((rule) => !rule.exclusion && ["exact_domain", "subdomain_tree"].includes(rule.kind))?.value || "";
+    const params = Object.fromEntries(Object.entries(scanParams.get(task.name) || {}).filter(([key]) => !hiddenScanField(task, key)));
+    const domains = scopeScanDomains();
+    for (const key of Object.keys(task.params_schema.properties || {})) {
+      if (key === "ips") params.ips = scopeScanIps();
+      else if (key === "domain") params.domain = domains[0] || "";
+      else if (["domains", "targets"].includes(key)) params[key] = domains;
+      else if (["seeds", "base_urls"].includes(key)) params[key] = domains.map((domain) => `https://${domain}/`);
     }
     return params;
   }
@@ -1143,6 +1165,7 @@
     if (action === "info") {
       content.appendChild(el("p", `Planned tools · ${module.planned}`, "scan-planned"));
     } else {
+      content.appendChild(el("p", "Targets are taken automatically from the approved Scope of this project. Edit Scope to change them.", "muted"));
       const tasks = moduleTasks(module);
       if (!tasks.length) content.appendChild(el("p", "No implemented tasks are available for this module yet.", "empty"));
       for (const task of tasks) {
@@ -1162,7 +1185,13 @@
         fields.hidden = !choice.checked || !task.available;
         choice.addEventListener("change", () => { fields.hidden = !choice.checked; });
         const params = defaultScanParams(task);
+        const ipTask = Object.hasOwn(task.params_schema.properties || {}, "ips");
+        const targets = ipTask ? scopeScanIps() : scopeScanDomains();
+        fields.appendChild(el("p", targets.length ? `${targets.length} ${ipTask ? "IP addresses" : "DNS names"} from project Scope: ${targets.join(", ")}`
+          : ipTask ? "No IP address records in Scope. Add allowed IP address records in Scope to use this task. DNS names alone do not authorize IP scanning."
+          : "No allowed DNS names in Scope. Add DNS Name records in Scope to use this task.", "muted field-hint"));
         for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
+          if (hiddenScanField(task, key)) continue;
           const field = el("div", null, "field");
           const id = `scan-setting-${task.name.replaceAll(".", "-")}-${key}`;
           const label = el("label", scanFieldLabels[key] || key);
@@ -1189,6 +1218,7 @@
           input.dataset.task = task.name;
           input.disabled = scanning || state.me?.role === "viewer";
           append(field, label, input);
+          if (key === "resolve") field.appendChild(el("p", "Look up IP addresses for discovered DNS names that are allowed by Scope.", "muted field-hint"));
           if (property.type === "array") {
             field.appendChild(el("p", property.items?.enum ? `Options: ${property.items.enum.join(", ")}. One per line or separated by commas.`
               : "One per line or separated by commas.", "muted field-hint"));
@@ -1251,13 +1281,20 @@
     for (const module of scanModules.filter((item) => selectedModules.has(item.id))) {
       for (const task of moduleTasks(module).filter((item) => item.available && scanChoices.get(module.id)?.has(item.name))) {
         const params = defaultScanParams(task);
+        const ipTask = Object.hasOwn(task.params_schema.properties || {}, "ips");
+        if (!(ipTask ? scopeScanIps() : scopeScanDomains()).length) {
+          openScanDialog(module, "settings");
+          $("#scan-settings-error").textContent = `Add allowed ${ipTask ? "IP address" : "DNS Name"} records in project Scope before starting ${task.title}.`;
+          return;
+        }
         const missing = (task.params_schema.required || []).find((key) => !params[key] || (Array.isArray(params[key]) && !params[key].length));
         if (missing) {
           openScanDialog(module, "settings");
           $("#scan-settings-error").textContent = `Configure ${scanFieldLabels[missing] || missing} before starting.`;
           return;
         }
-        tasks.set(task.name, params);
+        const runs = task.name === "dns.wordlist" ? scopeScanDomains().map((domain) => ({ ...params, domain })) : [params];
+        for (const run of runs) tasks.set(JSON.stringify({ task_type: task.name, params: run }), { task_type: task.name, params: run });
       }
     }
     if (!tasks.size) return;
@@ -1266,7 +1303,7 @@
     $("#scan-error").textContent = "";
     let submitted = 0;
     try {
-      for (const [task_type, params] of tasks) {
+      for (const { task_type, params } of tasks.values()) {
         const fingerprint = JSON.stringify({ projectId, task_type, params });
         if (!submissionKeys.has(fingerprint)) submissionKeys.set(fingerprint, crypto.randomUUID());
         await api(`/api/projects/${encodeURIComponent(projectId)}/jobs`, {
