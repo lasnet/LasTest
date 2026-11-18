@@ -473,6 +473,7 @@ tbody tr:hover { background: var(--canvas); }
 .job-card:last-child { padding-bottom: 0; }
 .job-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 9px; }
 .job-card p { font-size: 13px; }
+.job-card .table-time span { display: inline; margin-inline-start: 0.35em; font-size: inherit; }
 .job-card .button-row { margin-top: 0; }
 .job-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px 10px; margin: 0; }
 .job-counters dt { color: var(--muted); font-size: 12px; }

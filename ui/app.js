@@ -294,6 +294,7 @@
 
   async function selectProject(id) {
     state.projectId = id;
+    selectedModules.clear();
     scanParams.clear();
     rememberProject();
     state.project = state.projects.find((item) => item.project.id === id)?.project || null;
@@ -305,13 +306,11 @@
     $("#scope-note").value = "";
     $("#scope-search").value = "";
     $("#scope-error").textContent = "";
+    $("#scan-error").textContent = "";
     renderProjectCaption();
     notice("");
-    if (!id) {
-      render();
-      return;
-    }
-    renderDashboard();
+    render();
+    if (!id) return;
     try {
       const requests = [loadScope(), loadJobs()];
       if (["dashboard", "assets", "findings"].includes(state.view)) requests.push(loadDashboard());
@@ -421,7 +420,9 @@
 
   async function loadJobs() {
     if (!requireProject()) return;
-    const value = await api(`/api/projects/${encodeURIComponent(state.projectId)}/jobs?limit=100`);
+    const projectId = state.projectId;
+    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/jobs?limit=100`);
+    if (state.projectId !== projectId) return;
     state.jobs = value.items || [];
     renderJobs();
   }
@@ -501,10 +502,18 @@
     for (const job of state.jobs) {
       const card = el("article", null, "job-card");
       const head = el("div", null, "job-head");
-      append(head,
-        el("strong", job.task_type),
-        el("span", job.status, `badge ${statusClass(job.status)}`));
+      const module = scanModules.find((item) => item.tasks.includes(job.task_type));
+      const heading = el("div");
+      if (module) heading.appendChild(el("p", module.title, "muted"));
+      heading.appendChild(el("strong", job.task_type));
+      const status = el("span", job.status === "partial" ? "Completed with errors" : job.status,
+        `badge ${statusClass(job.status)}`);
+      status.title = job.status;
+      append(head, heading, status);
       card.appendChild(head);
+      if (job.finished_at) {
+        card.appendChild(append(el("p", "Finished ", "muted"), displayTime(job.finished_at)));
+      }
       const counters = job.counters || {};
       const details = el("dl", null, "job-counters");
       for (const [label, count] of [["Targets", counters.targets], ["Processed", counters.processed], ["Skipped", counters.skipped], ["Errors", counters.errors]]) {
@@ -1064,7 +1073,7 @@
   function renderScanModules() {
     for (const module of scanModules) {
       const available = moduleTasks(module).filter((task) => task.available);
-      if (!scanChoices.has(module.id)) scanChoices.set(module.id, new Set(available.slice(0, 1).map((task) => task.name)));
+      if (available.length && !scanChoices.has(module.id)) scanChoices.set(module.id, new Set([available[0].name]));
     }
     for (const family of ["recon", "vulnerability"]) {
       const container = $(`#${family}-modules`);
@@ -1106,12 +1115,13 @@
 
   function updateScanLaunch() {
     const ready = state.scope?.status === "approved";
+    const titles = scanModules.filter((module) => selectedModules.has(module.id)).map((module) => module.title);
     $("#start-scanning-button").disabled = scanning || !state.projectId || !ready || !selectedModules.size || state.me?.role === "viewer";
     $("#start-scanning-button").textContent = scanning ? "Submitting…" : "Start scanning";
     $("#scan-selection-status").textContent = !state.projectId ? "Select a project to start scanning."
       : !state.scope ? "Loading project scope…"
       : !ready ? "Approve the project scope before starting."
-      : selectedModules.size ? `${selectedModules.size} techniques selected` : "Select one or more techniques.";
+      : titles.length ? `Selected: ${titles.join(", ")}` : "Select one or more techniques.";
   }
 
   const scanFieldLabels = {
@@ -1301,20 +1311,28 @@
     scanning = true;
     renderScanModules();
     $("#scan-error").textContent = "";
-    let submitted = 0;
+    const submitted = [];
     try {
       for (const { task_type, params } of tasks.values()) {
         const fingerprint = JSON.stringify({ projectId, task_type, params });
-        if (!submissionKeys.has(fingerprint)) submissionKeys.set(fingerprint, crypto.randomUUID());
+        if (!submissionKeys.has(fingerprint)) {
+          const bytes = crypto.getRandomValues(new Uint8Array(16));
+          submissionKeys.set(fingerprint, Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+        }
         await api(`/api/projects/${encodeURIComponent(projectId)}/jobs`, {
           method: "POST", body: { task_type, params, idempotency_key: submissionKeys.get(fingerprint) },
         });
-        submitted += 1;
+        submitted.push(task_type);
       }
       submissionKeys.clear();
-      notice(`${submitted} scanning jobs submitted.`, "success");
+      if (state.projectId === projectId) {
+        selectedModules.clear();
+        notice(`Submitted ${submitted.length} ${submitted.length === 1 ? "job" : "jobs"} (${[...new Set(submitted)].join(", ")}).`, "success");
+      }
     } catch (error) {
-      $("#scan-error").textContent = `${submitted} jobs submitted. ${error.message} Retry to continue without duplicating submitted jobs.`;
+      if (state.projectId === projectId) {
+        $("#scan-error").textContent = `${submitted.length} jobs submitted. ${error.message} Retry to continue without duplicating submitted jobs.`;
+      }
     } finally {
       scanning = false;
       renderScanModules();
