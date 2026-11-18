@@ -1023,7 +1023,7 @@
   const scanModules = [
     { id: "subdomains", title: "Subdomain Enumeration", family: "recon", mode: "Passive Recon", tone: "green",
       tasks: ["subdomains.subfinder", "subdomains.discover", "dns.records", "dns.wordlist"],
-      description: "Find subdomains through passive sources and resolve their IP addresses. Subfinder uses public providers. DNS resolution runs only for hosts allowed by the approved scope. A domain entry alone authorizes that exact name; discovered names remain marked outside scope until explicitly approved.",
+      description: "Find subdomains through passive sources. With Resolve IP addresses enabled, Subfinder results are checked for A/AAAA records before hosts and IPs are added to Assets. DNS validation includes subdomains of the approved seed and respects exclusions. Connection checks use the approved host and IP scope.",
       planned: "Subfinder, subdomain-only ffuf, and an optimized dnsmap wordlist with eight workers." },
     { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
       tasks: ["reverse.ip"],
@@ -1228,7 +1228,7 @@
           input.dataset.task = task.name;
           input.disabled = scanning || state.me?.role === "viewer";
           append(field, label, input);
-          if (key === "resolve") field.appendChild(el("p", "Look up IP addresses for discovered DNS names that are allowed by Scope.", "muted field-hint"));
+          if (key === "resolve") field.appendChild(el("p", "Check discovered subdomains for A/AAAA records and add resolving names and their IPs to Assets. Names without addresses are recorded in the job artifact. Scope exclusions apply.", "muted field-hint"));
           if (property.type === "array") {
             field.appendChild(el("p", property.items?.enum ? `Options: ${property.items.enum.join(", ")}. One per line or separated by commas.`
               : "One per line or separated by commas.", "muted field-hint"));

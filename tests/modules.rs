@@ -479,15 +479,17 @@ async fn subfinder_adapter_bounds_output_and_resolves_only_allowed_hosts() {
         json!({"domains":["allowed.test"],"sources":["crtsh"]}),
     );
     let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
-    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 2);
+    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 1);
     assert!(outcome
         .observations
         .iter()
         .any(|item| item.asset == "203.0.113.10"));
-    assert!(outcome
+    assert_eq!(outcome.result["rejected"][0]["host"], "denied.allowed.test");
+    assert_eq!(outcome.result["rejected"][0]["reason"], "scope");
+    assert!(!outcome
         .observations
         .iter()
-        .any(|item| item.asset == "denied.allowed.test" && item.scope_status == "denied"));
+        .any(|item| item.asset == "denied.allowed.test"));
     assert!(!outcome
         .observations
         .iter()
@@ -562,4 +564,126 @@ async fn subfinder_adapter_stops_on_timeout_and_cancellation() {
         .downcast_ref::<lastest::tasks::TaskCancelled>()
         .is_some());
     cancel_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn subfinder_validates_exact_seed_children_and_keeps_only_resolving_assets() {
+    let env = TestEnv::new();
+    let temp = tempfile::TempDir::new().unwrap();
+    let script = temp.path().join("subfinder");
+    std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' api.allowed.test v6.allowed.test stale.allowed.test blocked.allowed.test outside.test\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dns = spawn_dns_server(|name, qtype| match (name, qtype) {
+        ("api.allowed.test", 1) => vec![vec![203, 0, 113, 10]],
+        ("v6.allowed.test", 28) => vec!["2001:db8::1"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets()
+            .to_vec()],
+        _ => vec![],
+    })
+    .await;
+    let scope = Scope::new(vec![
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::ExactDomain,
+            "allowed.test",
+            false,
+        )
+        .unwrap(),
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::ExactDomain,
+            "blocked.allowed.test",
+            true,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let mut ctx = task_context(&env, scope, "subfinder-exact");
+    ctx.config.subfinder_path = Some(script);
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    let job = make_job(
+        "subdomains.subfinder",
+        json!({"domains":["allowed.test"], "resolve":true}),
+    );
+    let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.status, lastest::domain::JobStatus::Succeeded);
+    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 2);
+    for ip in ["203.0.113.10", "2001:db8::1"] {
+        assert!(outcome
+            .observations
+            .iter()
+            .any(|item| item.asset == ip && item.asset_kind == "ip"));
+    }
+    assert!(!outcome
+        .observations
+        .iter()
+        .any(|item| item.asset == "stale.allowed.test" || item.asset == "blocked.allowed.test"));
+    assert!(outcome.result["rejected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["host"] == "stale.allowed.test" && item["reason"] == "no_addresses"));
+    assert!(!ctx.allows_host_now("api.allowed.test"));
+    assert!(!ctx.allows_ip_now("203.0.113.10".parse().unwrap()));
+    assert!(!dns
+        .queries
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == "blocked.allowed.test" || name == "outside.test"));
+
+    // Exercise publication through the worker, which creates Assets for the API.
+    let revision = env.db.current_scope(&ctx.project_id).unwrap().unwrap();
+    let queued = env
+        .db
+        .enqueue_job(
+            &ctx.project_id,
+            "subdomains.subfinder",
+            &job.params,
+            &revision.id,
+            revision.version,
+            None,
+            "admin",
+            None,
+            None,
+        )
+        .unwrap();
+    let claim = env
+        .db
+        .claim_next_job("subfinder-test", 30)
+        .unwrap()
+        .unwrap();
+    lastest::worker::Worker::new(ctx.config.clone(), env.db.clone())
+        .run_claimed(claim.job, claim.attempt_id, ctx.cancel.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        env.db.job_by_id(&queued.id).unwrap().unwrap().status,
+        lastest::domain::JobStatus::Succeeded
+    );
+    let assets = env.db.list_assets(&ctx.project_id, 100).unwrap();
+    assert_eq!(
+        assets
+            .iter()
+            .filter(|asset| asset["kind"] == "host")
+            .count(),
+        2
+    );
+    assert_eq!(
+        assets.iter().filter(|asset| asset["kind"] == "ip").count(),
+        2
+    );
+    assert!(!assets
+        .iter()
+        .any(|asset| asset["value"] == "stale.allowed.test"));
+
+    let passive = make_job(
+        "subdomains.subfinder",
+        json!({"domains":["allowed.test"], "resolve":false}),
+    );
+    let outcome = lastest::tasks::subfinder::run(&passive, &ctx)
+        .await
+        .unwrap();
+    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 4);
+    assert!(outcome.observations.iter().all(|item| item.kind == "host"));
 }

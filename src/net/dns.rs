@@ -70,7 +70,8 @@ impl DnsClient {
 
     pub async fn resolve_ips(&self, name: &str) -> Result<Vec<IpAddr>> {
         let mut ips = Vec::new();
-        for (record_type, label) in [(RecordType::A, "A"), (RecordType::AAAA, "AAAA")] {
+        let mut failure = None;
+        for record_type in [RecordType::A, RecordType::AAAA] {
             match self.lookup(name, record_type).await {
                 Ok(answers) => {
                     for answer in answers {
@@ -82,14 +83,31 @@ impl DnsClient {
                     }
                 }
                 Err(err) => {
-                    if label == "A" {
-                        return Err(err);
+                    // Try both address families, including AAAA-only names.
+                    // Prefer operational failures over negative DNS answers.
+                    let no_records = err
+                        .downcast_ref::<hickory_resolver::error::ResolveError>()
+                        .is_some_and(|error| {
+                            matches!(
+                                error.kind(),
+                                hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
+                                    response_code:
+                                        hickory_resolver::proto::op::ResponseCode::NoError
+                                            | hickory_resolver::proto::op::ResponseCode::NXDomain,
+                                    ..
+                                }
+                            )
+                        });
+                    if failure.is_none() || !no_records {
+                        failure = Some(err);
                     }
                 }
             }
         }
         if ips.is_empty() {
-            anyhow::bail!("DNS name did not resolve: {name}");
+            return Err(
+                failure.unwrap_or_else(|| anyhow::anyhow!("DNS name did not resolve: {name}"))
+            );
         }
         Ok(ips)
     }

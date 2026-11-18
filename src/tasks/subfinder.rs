@@ -99,6 +99,8 @@ async fn run_domains(
     outcome.target(domains.len());
     let mut seen = HashSet::new();
     let mut hosts = Vec::new();
+    let mut rejected = Vec::new();
+    let dns = ctx.dns()?;
     for raw in domains {
         ctx.ensure_active()?;
         let domain = normalize_domain(&raw)?;
@@ -196,53 +198,119 @@ async fn run_domains(
             if !seen.insert(host.clone()) {
                 continue;
             }
-            if hosts.len() >= ctx.config.max_queue_targets {
+            if seen.len() > ctx.config.max_queue_targets {
                 outcome.error("subfinder results reached the target limit");
                 break;
             }
+            let mut ips = Vec::new();
+            if resolve {
+                if !allows_discovery_dns(ctx, &domain, &host)? {
+                    outcome.skipped();
+                    rejected.push(json!({"host":host,"reason":"scope"}));
+                    continue;
+                }
+                let lookup = dns.resolve_ips(&host);
+                tokio::pin!(lookup);
+                let addresses = loop {
+                    tokio::select! {
+                        result = &mut lookup => break result,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                            ctx.ensure_active()?;
+                            if !allows_discovery_dns(ctx, &domain, &host)? {
+                                break Err(anyhow::anyhow!("DNS scope was revoked"));
+                            }
+                        }
+                    }
+                };
+                ctx.ensure_active()?;
+                if !allows_discovery_dns(ctx, &domain, &host)? {
+                    outcome.skipped();
+                    rejected.push(json!({"host":host,"reason":"scope"}));
+                    continue;
+                }
+                match addresses {
+                    Ok(addresses) => ips = addresses,
+                    Err(error) => {
+                        let no_records = error
+                            .downcast_ref::<hickory_resolver::error::ResolveError>()
+                            .is_some_and(|error| {
+                                matches!(
+                                    error.kind(),
+                                    hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
+                                        response_code: hickory_resolver::proto::op::ResponseCode::NoError
+                                            | hickory_resolver::proto::op::ResponseCode::NXDomain,
+                                        ..
+                                    }
+                                )
+                            });
+                        if !no_records {
+                            outcome.error(format!("DNS {host}: {error}"));
+                        }
+                        outcome.skipped();
+                        rejected.push(json!({
+                            "host": host,
+                            "reason": if no_records { "no_addresses" } else { "dns_error" },
+                            "error": error.to_string(),
+                        }));
+                        continue;
+                    }
+                }
+            }
             let allowed = ctx.allows_host_now(&host);
+            let scope_status = if allowed { "allowed" } else { "denied" };
             outcome.observe(
                 "subfinder",
                 "host",
                 "host",
                 &host,
-                json!({"domain": domain}),
-                if allowed { "allowed" } else { "denied" },
+                json!({"domain": domain, "dns_verified": resolve}),
+                scope_status,
             );
-            let mut ips = Vec::new();
-            if resolve && allowed {
-                match ctx.dns()?.resolve_ips(&host).await {
-                    Ok(addresses) => {
-                        for ip in addresses {
-                            ctx.ensure_active()?;
-                            if !ctx.allows_host_now(&host) {
-                                break;
-                            }
-                            outcome.observe("subfinder", "dns", "host", &host, json!({"record_type": if ip.is_ipv4() { "A" } else { "AAAA" }, "value": ip.to_string()}), "allowed");
-                            outcome.observe(
-                                "subfinder",
-                                "ip",
-                                "ip",
-                                &ip.to_string(),
-                                json!({"host": host}),
-                                if ctx.scope.allows_ip(ip) {
-                                    "allowed"
-                                } else {
-                                    "denied"
-                                },
-                            );
-                            ips.push(ip.to_string());
-                        }
-                    }
-                    Err(error) => outcome.error(format!("DNS {host}: {error}")),
-                }
+            for ip in &ips {
+                outcome.observe(
+                    "subfinder",
+                    "dns",
+                    "host",
+                    &host,
+                    json!({
+                        "record_type": if ip.is_ipv4() { "A" } else { "AAAA" },
+                        "value": ip.to_string(),
+                    }),
+                    scope_status,
+                );
+                outcome.observe(
+                    "subfinder",
+                    "ip",
+                    "ip",
+                    &ip.to_string(),
+                    json!({"host": host}),
+                    if ctx.allows_ip_now(*ip) {
+                        "allowed"
+                    } else {
+                        "denied"
+                    },
+                );
             }
-            hosts.push(json!({"host":host,"ips":ips,"scope_status":if allowed {"allowed"} else {"denied"}}));
+            hosts.push(
+                json!({"host":host,"ips":ips,"scope_status":scope_status,"dns_verified":resolve}),
+            );
         }
         outcome.processed();
     }
-    outcome.result = json!({"format_version":"1","hosts":hosts,"resolve":resolve});
+    outcome.result =
+        json!({"format_version":"1","hosts":hosts,"resolve":resolve,"rejected":rejected});
     let result = outcome.result.clone();
     outcome.add_artifact("subdomains", "subfinder.json", &result)?;
     Ok(outcome.finalize())
+}
+
+// Discovery may validate child names through DNS even when the approved seed
+// is an exact domain. Connection authorization continues to use the host rules.
+fn allows_discovery_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<bool> {
+    let current = ctx.current_scope()?;
+    Ok((host == domain || host.ends_with(&format!(".{domain}")))
+        && ctx.scope.snapshot.allows_host(domain)
+        && current.allows_host(domain)
+        && !ctx.scope.snapshot.exclusion_matches_host(host)
+        && !current.exclusion_matches_host(host))
 }
