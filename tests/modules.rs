@@ -409,24 +409,22 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
             .and_then(|line| line.split_once(':'))
             .map(|(_, value)| value.trim().to_string())
             .unwrap_or_else(|| "127.0.0.1".to_string());
-        if path.starts_with("/ct-next") {
-            return HttpResponse::new(
-                200,
-                "[{\"dns_names\":[\"api.allowed.test\",\"www.allowed.test\",\"*.allowed.test\"]}]",
-            );
-        }
-        if path.starts_with("/ct") {
-            return HttpResponse::new(
-                200,
-                "[{\"dns_names\":[\"www.allowed.test\",\"outside.test\"]}]",
-            )
-            .header("Link", &format!("<http://{host}/ct-next>; rel=\"next\""));
+        let url = url::Url::parse(&format!("http://{host}{path}")).unwrap();
+        let after = url.query_pairs().find(|(key, _)| key == "after").map(|(_, value)| value.into_owned());
+        if url.path() == "/v1/issuances" {
+            return match after.as_deref() {
+                None => HttpResponse::new(200, r#"[{"id":"1","dns_names":["www.allowed.test","outside.test"]}]"#)
+                    .header("Link", &format!("<http://{host}/issuances?after=1>; rel=\"next\"")),
+                Some("1") => HttpResponse::new(200, r#"[{"id":"2","dns_names":["api.allowed.test","www.allowed.test","*.allowed.test"]}]"#),
+                Some("2") => HttpResponse::new(200, "[]"),
+                _ => HttpResponse::new(400, "invalid cursor"),
+            };
         }
         HttpResponse::new(404, "")
     })
     .await;
     let mut config = env.config.clone();
-    config.certspotter_url = format!("http://127.0.0.1:{}/ct", server.addr.port());
+    config.certspotter_url = format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
     let scope = Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap();
     let mut ctx = task_context(&env, scope, "ct-job");
     ctx.config = config.clone();
@@ -447,7 +445,29 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
         .observations
         .iter()
         .any(|item| item.kind == "dns_wildcard" && item.asset == "allowed.test"));
-    assert_eq!(outcome.result["sources"][0]["pages"], 2);
+    assert_eq!(outcome.result["sources"][0]["pages"], 3);
+    assert_eq!(outcome.counters.errors, 0);
+    assert_eq!(outcome.result["sources"][0]["status"], "ok");
+    assert!(server.requests.lock().unwrap().iter().all(|request| {
+        let path = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
+        let url = url::Url::parse(&format!("http://localhost{path}")).unwrap();
+        url.path() == "/v1/issuances"
+            && url
+                .query_pairs()
+                .any(|(key, value)| key == "domain" && value == "allowed.test")
+            && url
+                .query_pairs()
+                .any(|(key, value)| key == "expand" && value == "dns_names")
+            && url
+                .query_pairs()
+                .any(|(key, value)| key == "include_subdomains" && value == "true")
+    }));
     assert!(outcome
         .observations
         .iter()
@@ -913,4 +933,163 @@ async fn subdomain_tasks_accept_more_than_fifty_domains() {
     assert!(lastest::tasks::registry::task_types(&ctx.config)
         .iter()
         .all(|t| t.limits.get("max_domains").is_none()));
+}
+
+#[tokio::test]
+async fn subfinder_treats_dns_absence_as_skipped_and_preserves_operational_errors() {
+    let env = TestEnv::new();
+    let script = env.temp.path().join("subfinder-dns");
+    std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' stale.allowed.test\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("exact", "allowed.test")])).unwrap(),
+        "dns-absence",
+    );
+    ctx.config.subfinder_path = Some(script);
+    let job = make_job("subdomains.subfinder", json!({"domains":["allowed.test"]}));
+    for code in [0, 3, 2, 5] {
+        let dns = support::spawn_dns_response_server(move |_, _| (code, vec![])).await;
+        ctx.config.dns_server = Some(dns.addr.to_string());
+        let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
+        assert!(outcome.result["hosts"].as_array().unwrap().is_empty());
+        let rejected = &outcome.result["rejected"][0];
+        if code == 0 || code == 3 {
+            assert_eq!(outcome.status, lastest::domain::JobStatus::Succeeded);
+            assert_eq!(outcome.counters.errors, 0);
+            assert_eq!(outcome.counters.skipped, 1);
+            assert_eq!(rejected["reason"], "no_addresses");
+            assert!(rejected.get("error").is_none());
+            let error = ctx
+                .dns()
+                .unwrap()
+                .resolve_ips("stale.allowed.test")
+                .await
+                .unwrap_err();
+            assert!(lastest::net::dns::is_no_records(
+                &error.context("address validation")
+            ));
+        } else {
+            assert_eq!(outcome.status, lastest::domain::JobStatus::Partial);
+            assert_eq!(outcome.counters.errors, 1);
+            assert_eq!(rejected["reason"], "dns_error");
+            assert!(outcome.errors[0].contains("DNS server returned"));
+            assert!(!outcome.errors[0].contains("no record found for Query"));
+            let records = make_job(
+                "dns.records",
+                json!({"targets":["allowed.test"],"record_types":["A"]}),
+            );
+            let outcome = dns_tasks::run_records(&records, &ctx).await.unwrap();
+            assert_eq!(
+                outcome.counters.errors, 1,
+                "DNS records must retain server failures"
+            );
+        }
+    }
+    // An AAAA-only host remains valid even when A returns NODATA.
+    let dns = support::spawn_dns_response_server(|_, kind| {
+        (
+            0,
+            if kind == 28 {
+                vec!["2001:db8::1"
+                    .parse::<std::net::Ipv6Addr>()
+                    .unwrap()
+                    .octets()
+                    .to_vec()]
+            } else {
+                vec![]
+            },
+        )
+    })
+    .await;
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    let outcome = lastest::tasks::subfinder::run(&job, &ctx).await.unwrap();
+    assert_eq!(outcome.counters.errors, 0);
+    assert_eq!(outcome.result["hosts"][0]["ips"], json!(["2001:db8::1"]));
+}
+
+#[tokio::test]
+async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() {
+    let env = TestEnv::new();
+    let job = make_job("subdomains.discover", json!({"domains":["allowed.test"]}));
+    for status in [404, 429, 500] {
+        let server = spawn_http_server(move |request| {
+            if request.contains("after=first") {
+                HttpResponse::new(status, "provider failure")
+            } else {
+                HttpResponse::new(200, r#"[{"id":"first","dns_names":["api.allowed.test"]}]"#)
+                    .header("Link", "<http://127.0.0.1:1/wrong-endpoint>; rel=\"next\"")
+            }
+        })
+        .await;
+        let mut ctx = task_context(
+            &env,
+            Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
+            &format!("ct-partial-{status}"),
+        );
+        ctx.config.certspotter_url =
+            format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
+        let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
+        assert_eq!(outcome.status, lastest::domain::JobStatus::Partial);
+        assert_eq!(outcome.result["subdomains"], json!(["api.allowed.test"]));
+        assert_eq!(outcome.result["sources"][0]["status"], "partial");
+        assert_eq!(outcome.counters.errors, 1);
+        assert!(outcome
+            .observations
+            .iter()
+            .any(|o| o.asset == "api.allowed.test"));
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let server =
+            spawn_http_server(move |_| HttpResponse::new(status, "provider failure")).await;
+        ctx.config.certspotter_url =
+            format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
+        let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
+        assert_eq!(outcome.result["sources"][0]["status"], "error");
+        assert_eq!(
+            outcome.counters.errors, 1,
+            "a genuine endpoint/provider failure is not an empty result"
+        );
+    }
+    for repeated_cursor in [true, false] {
+        let server = spawn_http_server(move |request| {
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let url = url::Url::parse(&format!("http://localhost{path}")).unwrap();
+            let after: u32 = url
+                .query_pairs()
+                .find(|(key, _)| key == "after")
+                .map(|(_, value)| value.parse().unwrap())
+                .unwrap_or(0);
+            let id = if repeated_cursor { 1 } else { after + 1 };
+            HttpResponse::new(
+                200,
+                json!([{"id":id.to_string(),"dns_names":[format!("h{id}.allowed.test")]}])
+                    .to_string(),
+            )
+        })
+        .await;
+        let mut ctx = task_context(
+            &env,
+            Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
+            &format!("ct-cursor-{repeated_cursor}"),
+        );
+        ctx.config.certspotter_url =
+            format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
+        let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
+        assert_eq!(outcome.status, lastest::domain::JobStatus::Partial);
+        assert_eq!(outcome.result["sources"][0]["status"], "partial");
+        assert_eq!(
+            server.hits.load(std::sync::atomic::Ordering::SeqCst),
+            if repeated_cursor { 2 } else { 10 }
+        );
+        assert_eq!(
+            outcome.result["subdomains"].as_array().unwrap().len(),
+            if repeated_cursor { 1 } else { 10 }
+        );
+    }
 }

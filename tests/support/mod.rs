@@ -365,6 +365,14 @@ pub async fn spawn_dns_server<F>(answers: F) -> DnsServer
 where
     F: Fn(&str, u16) -> Vec<Vec<u8>> + Send + Sync + 'static,
 {
+    spawn_dns_response_server(move |name, kind| (0, answers(name, kind))).await
+}
+
+/// DNS fixture with explicit response codes, including NXDOMAIN/SERVFAIL.
+pub async fn spawn_dns_response_server<F>(answers: F) -> DnsServer
+where
+    F: Fn(&str, u16) -> (u8, Vec<Vec<u8>>) + Send + Sync + 'static,
+{
     let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let addr = socket.local_addr().unwrap();
     let queries = Arc::new(Mutex::new(Vec::new()));
@@ -412,10 +420,10 @@ where
                 .lock()
                 .unwrap()
                 .push((name.clone(), query_type));
-            let rdatas = answers(&name, query_type);
+            let (rcode, rdatas) = answers(&name, query_type);
             let mut response = Vec::new();
             response.extend_from_slice(&packet[0..2]);
-            response.extend_from_slice(&[0x81, 0x80]);
+            response.extend_from_slice(&[0x81, 0x80 | (rcode & 0x0f)]);
             response.extend_from_slice(&1u16.to_be_bytes());
             response.extend_from_slice(&(rdatas.len() as u16).to_be_bytes());
             response.extend_from_slice(&0u16.to_be_bytes());

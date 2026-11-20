@@ -191,9 +191,9 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                     }
                 }
                 Err(err) => {
-                    let message = err.to_string();
-                    if !message.to_ascii_lowercase().contains("no record") {
-                        outcome.error(format!("{host} {record_type}: {err}"));
+                    if !crate::net::dns::is_no_records(&err) {
+                        let message = crate::net::dns::error_message(&err);
+                        outcome.error(format!("{host} {record_type}: {message}"));
                     }
                 }
             }

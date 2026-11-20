@@ -45,6 +45,16 @@ impl Worker {
                 flag.store(true, Ordering::SeqCst);
             });
         }
+        self.run_until_shutdown(shutdown).await
+    }
+
+    /// Run independent jobs in bounded parallel slots; chain dependencies are
+    /// enforced atomically by claim_next_job. Drain active jobs on shutdown.
+    pub async fn run_until_shutdown(&self, shutdown: Arc<AtomicBool>) -> Result<()> {
+        anyhow::ensure!(
+            self.config.max_concurrent_jobs > 0,
+            "max_concurrent_jobs must be at least 1"
+        );
         self.cleanup_stale_files();
         self.cleanup_orphaned_evidence();
         if let Ok(count) = self.db.interrupt_expired_attempts() {
@@ -52,25 +62,61 @@ impl Worker {
                 tracing::warn!(count, "expired job leases were marked interrupted");
             }
         }
-        tracing::info!(worker = %self.worker_id, "worker started");
-        while !shutdown.load(Ordering::SeqCst) {
-            let claimed = self
-                .db
-                .claim_next_job(&self.worker_id, self.config.worker_lease_seconds)?;
-            let Some(claim) = claimed else {
+        self.db.register_worker(&self.worker_id)?;
+        tracing::info!(worker = %self.worker_id, slots = self.config.max_concurrent_jobs, "worker started");
+        let mut active = tokio::task::JoinSet::new();
+        let mut poll =
+            tokio::time::interval(Duration::from_millis(self.config.worker_poll_ms.max(1)));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut result = async {
+            while !shutdown.load(Ordering::SeqCst) {
+                while active.len() < self.config.max_concurrent_jobs as usize
+                    && !shutdown.load(Ordering::SeqCst)
+                {
+                    let Some(claim) = self
+                        .db
+                        .claim_next_job(&self.worker_id, self.config.worker_lease_seconds)?
+                    else {
+                        break;
+                    };
+                    tracing::info!(job = %claim.job.id, task = %claim.job.task_type, "job claimed");
+                    let worker = self.clone();
+                    let shutdown = shutdown.clone();
+                    active.spawn(async move {
+                        worker
+                            .run_claimed(claim.job, claim.attempt_id, shutdown)
+                            .await
+                    });
+                }
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(self.config.worker_poll_ms)) => {}
+                    completed = active.join_next(), if !active.is_empty() => {
+                        if let Some(completed) = completed {
+                            completed.context("job execution panicked")??;
+                        }
+                    }
+                    _ = poll.tick() => self.db.worker_heartbeat(&self.worker_id)?,
                     _ = wait_for_shutdown(shutdown.clone()) => {}
                 }
-                continue;
-            };
-            tracing::info!(job = %claim.job.id, task = %claim.job.task_type, "job claimed");
-            self.run_claimed(claim.job, claim.attempt_id, shutdown.clone())
-                .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        if result.is_err() {
+            shutdown.store(true, Ordering::SeqCst);
+        }
+        while let Some(completed) = active.join_next().await {
+            if let Err(error) = completed
+                .context("job execution panicked")
+                .and_then(|value| value)
+            {
+                if result.is_ok() {
+                    result = Err(error);
+                }
+            }
         }
         let _ = self.db.stop_worker(&self.worker_id);
         tracing::info!("worker stopped");
-        Ok(())
+        result
     }
 
     pub async fn run_claimed(
@@ -152,7 +198,11 @@ impl Worker {
                 None
             },
         };
-        let result = tasks::execute(&job, &ctx).await;
+        let mut result = tasks::execute(&job, &ctx).await;
+        let was_cancelled = cancel.load(Ordering::SeqCst) || shutdown.load(Ordering::SeqCst);
+        if was_cancelled {
+            result = Err(anyhow::Error::new(TaskCancelled));
+        }
         cancel.store(true, Ordering::SeqCst);
         heartbeat.abort();
         let _ = heartbeat.await;
@@ -178,8 +228,7 @@ impl Worker {
                 }
             },
             Err(err) => {
-                let cancelled =
-                    err.downcast_ref::<TaskCancelled>().is_some() || cancel.load(Ordering::SeqCst);
+                let cancelled = err.downcast_ref::<TaskCancelled>().is_some() || was_cancelled;
                 let (status, message) = if cancelled {
                     (
                         JobStatus::Cancelled,
@@ -360,7 +409,13 @@ fn spawn_heartbeat(
     tokio::spawn(async move {
         let interval = Duration::from_secs((lease_seconds.max(3) as u64) / 3);
         loop {
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {},
+                _ = wait_for_shutdown(shutdown.clone()) => {
+                    cancel.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
             let _ = db.worker_heartbeat(&worker_id);
             if shutdown.load(Ordering::SeqCst) {
                 cancel.store(true, Ordering::SeqCst);

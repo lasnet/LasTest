@@ -231,27 +231,17 @@ async fn run_domains(
                 match addresses {
                     Ok(addresses) => ips = addresses,
                     Err(error) => {
-                        let no_records = error
-                            .downcast_ref::<hickory_resolver::error::ResolveError>()
-                            .is_some_and(|error| {
-                                matches!(
-                                    error.kind(),
-                                    hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
-                                        response_code: hickory_resolver::proto::op::ResponseCode::NoError
-                                            | hickory_resolver::proto::op::ResponseCode::NXDomain,
-                                        ..
-                                    }
-                                )
-                            });
-                        if !no_records {
-                            outcome.error(format!("DNS {host}: {error}"));
-                        }
+                        let no_records = crate::net::dns::is_no_records(&error);
                         outcome.skipped();
-                        rejected.push(json!({
-                            "host": host,
-                            "reason": if no_records { "no_addresses" } else { "dns_error" },
-                            "error": error.to_string(),
-                        }));
+                        if no_records {
+                            rejected.push(json!({"host": host, "reason": "no_addresses"}));
+                        } else {
+                            let message = crate::net::dns::error_message(&error);
+                            outcome.error(format!("DNS {host}: {message}"));
+                            rejected.push(
+                                json!({"host": host, "reason": "dns_error", "error": message}),
+                            );
+                        }
                         continue;
                     }
                 }

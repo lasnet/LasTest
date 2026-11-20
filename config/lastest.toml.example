@@ -17,7 +17,8 @@ internal_ranges = []
 
 worker_poll_ms = 500
 worker_lease_seconds = 60
-max_concurrent_jobs = 1
+# Independent jobs per worker; chain stages still run in order.
+max_concurrent_jobs = 4
 http_timeout_seconds = 10
 max_body_bytes = 2097152
 max_redirects = 5

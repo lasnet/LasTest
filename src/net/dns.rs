@@ -6,6 +6,46 @@ use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::TokioAsyncResolver;
 use std::net::IpAddr;
 
+#[derive(Debug, thiserror::Error)]
+#[error("No A or AAAA records for {host}")]
+pub struct NoAddresses {
+    host: String,
+}
+
+/// NXDOMAIN and NODATA are expected discovery misses, unlike SERVFAIL,
+/// REFUSED, transport errors and timeouts. Keep this distinction typed.
+pub fn is_no_records(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<NoAddresses>()
+            || cause
+                .downcast_ref::<hickory_resolver::error::ResolveError>()
+                .is_some_and(|error| {
+                    matches!(
+                        error.kind(),
+                        hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
+                            response_code: hickory_resolver::proto::op::ResponseCode::NoError
+                                | hickory_resolver::proto::op::ResponseCode::NXDomain,
+                            ..
+                        }
+                    )
+                })
+    })
+}
+
+pub fn error_message(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<hickory_resolver::error::ResolveError>() {
+            if let hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
+                response_code, ..
+            } = error.kind()
+            {
+                return format!("DNS server returned {response_code}");
+            }
+        }
+    }
+    error.to_string()
+}
+
 #[derive(Clone)]
 pub struct DnsClient {
     resolver: TokioAsyncResolver,
@@ -85,19 +125,7 @@ impl DnsClient {
                 Err(err) => {
                     // Try both address families, including AAAA-only names.
                     // Prefer operational failures over negative DNS answers.
-                    let no_records = err
-                        .downcast_ref::<hickory_resolver::error::ResolveError>()
-                        .is_some_and(|error| {
-                            matches!(
-                                error.kind(),
-                                hickory_resolver::error::ResolveErrorKind::NoRecordsFound {
-                                    response_code:
-                                        hickory_resolver::proto::op::ResponseCode::NoError
-                                            | hickory_resolver::proto::op::ResponseCode::NXDomain,
-                                    ..
-                                }
-                            )
-                        });
+                    let no_records = is_no_records(&err);
                     if failure.is_none() || !no_records {
                         failure = Some(err);
                     }
@@ -105,9 +133,13 @@ impl DnsClient {
             }
         }
         if ips.is_empty() {
-            return Err(
-                failure.unwrap_or_else(|| anyhow::anyhow!("DNS name did not resolve: {name}"))
-            );
+            if let Some(error) = failure.filter(|error| !is_no_records(error)) {
+                return Err(error);
+            }
+            return Err(NoAddresses {
+                host: name.to_owned(),
+            }
+            .into());
         }
         Ok(ips)
     }

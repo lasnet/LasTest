@@ -80,9 +80,11 @@ install -d -m 0750 -o 10001 -g 10001 /srv/lastest-data
 
 ## Конфигурация
 
-Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_NMAP_PATH`, `LASTEST_SUBFINDER_PATH`, `LASTEST_DNSMAP_PATH`, `LASTEST_LOG_LEVEL`.
+Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_MAX_CONCURRENT_JOBS`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_NMAP_PATH`, `LASTEST_SUBFINDER_PATH`, `LASTEST_DNSMAP_PATH`, `LASTEST_LOG_LEVEL`.
 
 Docker-образ включает классический dnsmap 0.36 из закреплённого исходника. Его служебные DNS-пробы отключены патчем: Scope и wildcard проверяет LasTest. Вне Docker задайте `dnsmap_path` / `LASTEST_DNSMAP_PATH` на аналогично собранный бинарник (патч `src/tasks/dnsmap-probes.patch`). Без бинарника задача отображается как недоступная. dnsmap использует системный DNS resolver; для контейнера настройте DNS средствами Docker. Повторная A/AAAA-проверка LasTest использует `LASTEST_DNS_SERVER`, если он задан. `dnsmap_timeout_seconds` задаёт общий таймаут процессов одного домена, по умолчанию 600 секунд. Лимиты артефактов и сетевых таймаутов сохраняются.
+
+Worker выполняет до четырёх независимых заданий одновременно по умолчанию. Лимит задаётся через `max_concurrent_jobs` в TOML или `LASTEST_MAX_CONCURRENT_JOBS` (положительное целое число; env имеет приоритет). В Compose значение по умолчанию — 4. При нескольких процессах worker лимит применяется к каждому из них. Значение 1 сохраняет последовательное выполнение. Этапы одной цепочки `All in one` ждут публикации результатов предыдущего этапа при любом лимите. При остановке worker перестаёт брать задания и завершает отмену уже запущенных задач.
 
 Внутренние диапазоны — только явно заданные администратором. Адреса метаданных (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) блокируются всегда. DNS-имя в scope не даёт разрешения на сканирование всех портов его IP.
 

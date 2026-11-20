@@ -25,8 +25,8 @@
 | --- | --- |
 | Scope, URL, IDNA, IPv6/CIDR, исключения, metadata, redirect, scope narrowing, отсутствие запроса вне scope | `tests/scope_network.rs`, unit tests `src/scope` |
 | Первый администратор, истечение и перевыпуск кода, миграция базы, cookie/Bearer, CSRF, роли и аудит | `tests/auth_api.rs` |
-| Очередь, два worker, отмена, lease, stale attempt, идемпотентность, partial, лимит артефакта, цепочка, публикация файлов | `tests/queue_files.rs` |
-| Локальный DNS, wildcard, HTTP/crawler, soft 404, archive sources, reverse IP provider, SOCKS5, Nmap XML, web rules | `tests/modules.rs`, unit tests `src/tasks/web_checks.rs` |
+| Очередь, два worker, 1/4 параллельных слота и их пополнение, изоляция ошибок/отмены, остановка процессов, lease, stale attempt, идемпотентность, partial, лимит артефакта, порядок цепочки, публикация файлов | `tests/queue_files.rs`, `tests/worker_parallel.rs` |
+| Локальный DNS (NODATA/NXDOMAIN/SERVFAIL/REFUSED/IPv6), wildcard, CT after-пагинация и сохранение частичных результатов, HTTP/crawler, soft 404, archive sources, reverse IP provider, SOCKS5, Nmap XML, web rules | `tests/modules.rs`, unit tests `src/tasks/web_checks.rs` |
 | Импорт, dry-run=apply, конфликт имён, symlink, идемпотентность, архивные jobs, pending scope, backup | `tests/import.rs` |
 | CLI/UI API и persistence | `tests/e2e_cli.rs` |
 

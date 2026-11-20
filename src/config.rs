@@ -79,7 +79,7 @@ impl Default for Config {
             internal_ranges: Vec::new(),
             worker_poll_ms: 500,
             worker_lease_seconds: 60,
-            max_concurrent_jobs: 1,
+            max_concurrent_jobs: 4,
             http_timeout_seconds: 10,
             max_body_bytes: 2 * 1024 * 1024,
             max_redirects: 5,
@@ -150,6 +150,11 @@ impl Config {
     }
 
     fn apply_env(&mut self) -> Result<()> {
+        if let Ok(value) = std::env::var("LASTEST_MAX_CONCURRENT_JOBS") {
+            self.max_concurrent_jobs = value
+                .parse()
+                .context("LASTEST_MAX_CONCURRENT_JOBS must be a positive integer")?;
+        }
         if let Ok(value) = std::env::var("LASTEST_DNSMAP_PATH") {
             self.dnsmap_path = (!value.trim().is_empty()).then(|| PathBuf::from(value));
         }

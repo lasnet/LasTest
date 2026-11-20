@@ -121,13 +121,16 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                             if allowed { "allowed" } else { "denied" },
                         );
                     }
-                    source_status.push(json!({
-                        "provider": "certspotter",
-                        "domain": domain,
-                        "status": "ok",
-                        "pages": result.pages,
-                        "issuances": result.issuances
-                    }));
+                    let mut source = json!({
+                        "provider": "certspotter", "domain": domain,
+                        "status": if result.error.is_some() { "partial" } else { "ok" },
+                        "pages": result.pages, "issuances": result.issuances,
+                    });
+                    if let Some(error) = result.error {
+                        outcome.error(format!("certspotter {domain}: {error}"));
+                        source["reason"] = json!(error);
+                    }
+                    source_status.push(source);
                 }
                 Err(err) => {
                     outcome.error(format!("certspotter {domain}: {err}"));
@@ -161,6 +164,7 @@ struct CtResult {
     names: Vec<String>,
     pages: u32,
     issuances: u64,
+    error: Option<String>,
 }
 
 async fn collect_certspotter(
@@ -168,104 +172,110 @@ async fn collect_certspotter(
     ctx: &TaskContext,
     domain: &str,
 ) -> Result<CtResult> {
-    let mut next = {
-        let mut url = Url::parse(&ctx.config.certspotter_url)?;
-        url.query_pairs_mut()
-            .append_pair("domain", domain)
-            .append_pair("include_subdomains", "true")
-            .append_pair("expand", "dns_names");
-        url
-    };
-    let base_origin = Url::parse(&ctx.config.certspotter_url)?
-        .origin()
-        .ascii_serialization();
+    // Build every page from the configured v1 endpoint. The provider's Link
+    // header can omit /v1; the documented cursor is the last issuance's id.
+    let mut endpoint = Url::parse(&ctx.config.certspotter_url)?;
+    let retained: Vec<(String, String)> = endpoint
+        .query_pairs()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_ref(),
+                "domain" | "include_subdomains" | "expand" | "after"
+            )
+        })
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    endpoint.set_query(None);
+    endpoint
+        .query_pairs_mut()
+        .extend_pairs(retained)
+        .append_pair("domain", domain)
+        .append_pair("include_subdomains", "true")
+        .append_pair("expand", "dns_names");
+    let mut next = endpoint.clone();
     let mut names = Vec::new();
     let mut pages = 0u32;
     let mut issuances = 0u64;
-    while pages < 10 {
-        ctx.ensure_active()?;
-        pages += 1;
-        let mut request = client.get(next.clone());
-        if let Some(token) = &ctx.config.certspotter_token {
-            request = request.bearer_auth(token);
-        }
-        let response = request
-            .timeout(ctx.config.http_timeout())
-            .send()
-            .await
-            .context("certspotter request failed")?;
-        let status = response.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            anyhow::bail!("Cert Spotter quota exceeded (HTTP 429)");
-        }
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            anyhow::bail!("Cert Spotter rejected the configured credentials");
-        }
-        if !status.is_success() {
-            anyhow::bail!("Cert Spotter returned HTTP {status}");
-        }
-        let link = response
-            .headers()
-            .get("link")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        let mut body = Vec::new();
-        let mut response = response;
-        while let Some(chunk) = response.chunk().await? {
-            let remaining = (ctx.config.max_body_bytes as usize).saturating_sub(body.len());
-            if chunk.len() > remaining {
-                anyhow::bail!("Cert Spotter response exceeded configured body limit");
+    let mut cursors = HashSet::new();
+    let result = async {
+        loop {
+            ctx.ensure_active()?;
+            pages += 1;
+            let mut request = client.get(next.clone());
+            if let Some(token) = &ctx.config.certspotter_token {
+                request = request.bearer_auth(token);
             }
-            body.extend_from_slice(&chunk);
-            if body.len() >= ctx.config.max_body_bytes as usize {
-                anyhow::bail!("Cert Spotter response exceeded configured body limit");
+            let response = request
+                .timeout(ctx.config.http_timeout())
+                .send()
+                .await
+                .context("certspotter request failed")?;
+            let status = response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                anyhow::bail!("Cert Spotter quota exceeded (HTTP 429)");
             }
-        }
-        let value: Value = serde_json::from_slice(&body).context("invalid Cert Spotter JSON")?;
-        let Some(items) = value.as_array() else {
-            anyhow::bail!("unexpected Cert Spotter payload");
-        };
-        for item in items {
-            issuances += 1;
-            if let Some(list) = item.get("dns_names").and_then(Value::as_array) {
-                for name in list {
-                    if let Some(name) = name.as_str() {
-                        names.push(name.to_string());
-                    }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                anyhow::bail!("Cert Spotter rejected the configured credentials");
+            }
+            if !status.is_success() {
+                anyhow::bail!("Cert Spotter returned HTTP {status}");
+            }
+            let mut body = Vec::new();
+            let mut response = response;
+            while let Some(chunk) = response.chunk().await? {
+                if chunk.len() as u64 > ctx.config.max_body_bytes.saturating_sub(body.len() as u64)
+                {
+                    anyhow::bail!("Cert Spotter response exceeded configured body limit");
+                }
+                body.extend_from_slice(&chunk);
+            }
+            let value: Value =
+                serde_json::from_slice(&body).context("invalid Cert Spotter JSON")?;
+            let items = value
+                .as_array()
+                .context("unexpected Cert Spotter payload")?;
+            if items.is_empty() {
+                break;
+            }
+            for item in items {
+                issuances += 1;
+                if let Some(list) = item.get("dns_names").and_then(Value::as_array) {
+                    names.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
                 }
             }
+            let cursor = items
+                .last()
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .context("Cert Spotter response is missing its pagination id")?;
+            if !cursors.insert(cursor.to_owned()) {
+                anyhow::bail!("Cert Spotter repeated its pagination id; results are incomplete");
+            }
+            if pages >= 10 {
+                anyhow::bail!("Cert Spotter reached the 10-page limit; results are incomplete");
+            }
+            next = endpoint.clone();
+            next.query_pairs_mut().append_pair("after", cursor);
         }
-        let Some(link) = link else {
-            break;
-        };
-        let Some(next_url) = parse_link_next(&link) else {
-            break;
-        };
-        if next_url.origin().ascii_serialization() != base_origin {
-            anyhow::bail!("Cert Spotter pagination link points to an unexpected origin");
-        }
-        next = next_url;
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
+    let error = match result {
+        Ok(()) => None,
+        Err(error) if error.is::<crate::tasks::TaskCancelled>() || issuances == 0 => {
+            return Err(error)
+        }
+        Err(error) => Some(error.to_string()),
+    };
     Ok(CtResult {
         names,
         pages,
         issuances,
+        error,
     })
-}
-
-fn parse_link_next(link: &str) -> Option<Url> {
-    for part in link.split(',') {
-        let mut pieces = part.split(';');
-        let url_part = pieces.next()?.trim().trim_matches(['<', '>']);
-        let rel = pieces.any(|piece| {
-            let piece = piece.trim();
-            piece == "rel=\"next\"" || piece == "rel=next"
-        });
-        if rel {
-            return Url::parse(url_part).ok();
-        }
-    }
-    None
 }
 
 pub async fn run_urls_passive(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
