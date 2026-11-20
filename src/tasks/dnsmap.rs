@@ -1,7 +1,7 @@
 //! dnsmap 0.36 adapter. Partition wordlists rather than assuming a thread flag.
 use crate::config::Config;
 use crate::scope::normalize_domain;
-use crate::tasks::{parse_params, subfinder::allows_discovery_dns, TaskContext};
+use crate::tasks::{discovery::allows_dns, parse_params, TaskContext};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -112,7 +112,7 @@ pub async fn discover(
     let mut labels = Vec::new();
     for word in words {
         let host = candidate(word, &domain)?;
-        if allows_discovery_dns(ctx, &domain, &host)? {
+        if allows_dns(ctx, &domain, &host)? {
             allowed.insert(host);
             labels.push(word.clone());
         }

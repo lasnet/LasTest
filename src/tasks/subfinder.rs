@@ -1,7 +1,7 @@
 //! Optional passive subfinder process with bounded output and native DNS resolution.
 use crate::domain::Job;
 use crate::scope::{normalize_domain, RuleKind};
-use crate::tasks::{dedup_strings, parse_params, TaskContext, TaskOutcome};
+use crate::tasks::{dedup_strings, discovery, parse_params, TaskContext, TaskOutcome};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
@@ -17,6 +17,7 @@ pub struct SubfinderParams {
     #[serde(default)]
     pub sources: Vec<String>,
     #[serde(default = "resolve_default")]
+    // Legacy API field: accepted, but DNS verification is mandatory.
     pub resolve: bool,
 }
 
@@ -82,7 +83,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         .context("subfinder path is missing")?;
     let home = ctx.config.tmp_dir().join(format!("subfinder-{}", job.id));
     tokio::fs::create_dir_all(&home).await?;
-    let result = run_domains(path, &home, domains, &params.sources, params.resolve, ctx).await;
+    let result = run_domains(path, &home, domains, &params.sources, ctx).await;
     let _ = tokio::fs::remove_dir_all(&home).await;
     result
 }
@@ -92,7 +93,6 @@ async fn run_domains(
     home: &std::path::Path,
     domains: Vec<String>,
     sources: &[String],
-    resolve: bool,
     ctx: &TaskContext,
 ) -> Result<TaskOutcome> {
     let mut outcome = TaskOutcome::new();
@@ -202,105 +202,39 @@ async fn run_domains(
                 outcome.error("subfinder results reached the target limit");
                 break;
             }
-            let mut ips = Vec::new();
-            if resolve {
-                if !allows_discovery_dns(ctx, &domain, &host)? {
-                    outcome.skipped();
-                    rejected.push(json!({"host":host,"reason":"scope"}));
-                    continue;
-                }
-                let lookup = dns.resolve_ips(&host);
-                tokio::pin!(lookup);
-                let addresses = loop {
-                    tokio::select! {
-                        result = &mut lookup => break result,
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                            ctx.ensure_active()?;
-                            if !allows_discovery_dns(ctx, &domain, &host)? {
-                                break Err(anyhow::anyhow!("DNS scope was revoked"));
-                            }
-                        }
-                    }
-                };
-                ctx.ensure_active()?;
-                if !allows_discovery_dns(ctx, &domain, &host)? {
-                    outcome.skipped();
-                    rejected.push(json!({"host":host,"reason":"scope"}));
-                    continue;
-                }
-                match addresses {
-                    Ok(addresses) => ips = addresses,
-                    Err(error) => {
-                        let no_records = crate::net::dns::is_no_records(&error);
-                        outcome.skipped();
-                        if no_records {
-                            rejected.push(json!({"host": host, "reason": "no_addresses"}));
-                        } else {
-                            let message = crate::net::dns::error_message(&error);
-                            outcome.error(format!("DNS {host}: {message}"));
-                            rejected.push(
-                                json!({"host": host, "reason": "dns_error", "error": message}),
-                            );
-                        }
-                        continue;
-                    }
-                }
+            if !discovery::allows_dns(ctx, &domain, &host)? {
+                outcome.skipped();
+                rejected.push(json!({"host":host,"reason":"scope"}));
+                continue;
             }
+            let ips = match discovery::resolve_ips(&dns, ctx, &domain, &host).await {
+                Ok(ips) => ips,
+                Err(error) => {
+                    ctx.ensure_active()?;
+                    outcome.skipped();
+                    if !discovery::allows_dns(ctx, &domain, &host)? {
+                        rejected.push(json!({"host":host,"reason":"scope"}));
+                    } else if crate::net::dns::is_no_records(&error) {
+                        rejected.push(json!({"host":host,"reason":"no_addresses"}));
+                    } else {
+                        let message = crate::net::dns::error_message(&error);
+                        outcome.error(format!("DNS {host}: {message}"));
+                        rejected.push(json!({"host":host,"reason":"dns_error","error":message}));
+                    }
+                    continue;
+                }
+            };
+            discovery::observe_host(&mut outcome, ctx, "subfinder", &domain, &host, &ips)?;
             let allowed = ctx.allows_host_now(&host);
             let scope_status = if allowed { "allowed" } else { "denied" };
-            outcome.observe(
-                "subfinder",
-                "host",
-                "host",
-                &host,
-                json!({"domain": domain, "dns_verified": resolve}),
-                scope_status,
-            );
-            for ip in &ips {
-                outcome.observe(
-                    "subfinder",
-                    "dns",
-                    "host",
-                    &host,
-                    json!({
-                        "record_type": if ip.is_ipv4() { "A" } else { "AAAA" },
-                        "value": ip.to_string(),
-                    }),
-                    scope_status,
-                );
-                outcome.observe(
-                    "subfinder",
-                    "ip",
-                    "ip",
-                    &ip.to_string(),
-                    json!({"host": host}),
-                    if ctx.allows_ip_now(*ip) {
-                        "allowed"
-                    } else {
-                        "denied"
-                    },
-                );
-            }
             hosts.push(
-                json!({"host":host,"ips":ips,"scope_status":scope_status,"dns_verified":resolve}),
+                json!({"host":host,"ips":ips,"scope_status":scope_status,"dns_verified":true}),
             );
         }
         outcome.processed();
     }
-    outcome.result =
-        json!({"format_version":"1","hosts":hosts,"resolve":resolve,"rejected":rejected});
+    outcome.result = json!({"format_version":"1","hosts":hosts,"resolve":true,"rejected":rejected});
     let result = outcome.result.clone();
     outcome.add_artifact("subdomains", "subfinder.json", &result)?;
     Ok(outcome.finalize())
-}
-
-// Discovery may validate child names through DNS even when the approved seed
-// is an exact domain. Connection authorization continues to use the host rules.
-pub(crate) fn allows_discovery_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<bool> {
-    let current = ctx.current_scope()?;
-    Ok((host == domain || host.ends_with(&format!(".{domain}")))
-        && ctx.scope.snapshot.allows_host(domain)
-        && current.allows_host(domain)
-        && !ctx.scope.snapshot.exclusion_matches_host(host)
-        && !current.exclusion_matches_host(host))
 }

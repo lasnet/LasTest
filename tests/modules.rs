@@ -425,6 +425,15 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
     .await;
     let mut config = env.config.clone();
     config.certspotter_url = format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
+    let dns = spawn_dns_server(|name, kind| {
+        if ["www.allowed.test", "api.allowed.test"].contains(&name) && kind == 1 {
+            vec![vec![203, 0, 113, 10]]
+        } else {
+            vec![]
+        }
+    })
+    .await;
+    config.dns_server = Some(dns.addr.to_string());
     let scope = Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap();
     let mut ctx = task_context(&env, scope, "ct-job");
     ctx.config = config.clone();
@@ -441,10 +450,11 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
         .collect();
     assert!(hosts.contains(&"www.allowed.test"));
     assert!(hosts.contains(&"api.allowed.test"));
-    assert!(outcome
+    assert_eq!(outcome.result["wildcards"], json!(["allowed.test"]));
+    assert!(!outcome
         .observations
         .iter()
-        .any(|item| item.kind == "dns_wildcard" && item.asset == "allowed.test"));
+        .any(|item| item.kind == "dns_wildcard"));
     assert_eq!(outcome.result["sources"][0]["pages"], 3);
     assert_eq!(outcome.counters.errors, 0);
     assert_eq!(outcome.result["sources"][0]["status"], "ok");
@@ -468,10 +478,17 @@ async fn certificate_transparency_pagination_wildcards_and_quota_errors() {
                 .query_pairs()
                 .any(|(key, value)| key == "include_subdomains" && value == "true")
     }));
-    assert!(outcome
-        .observations
+    assert!(outcome.result["rejected"]
+        .as_array()
+        .unwrap()
         .iter()
-        .any(|item| item.asset == "outside.test" && item.scope_status == "denied"));
+        .any(|item| item["host"] == "outside.test" && item["reason"] == "scope"));
+    assert!(!dns
+        .queries
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(host, _)| host == "outside.test" || host == "allowed.test"));
 
     let quota = spawn_http_server(|_| HttpResponse::new(429, "quota")).await;
     let mut config = env.config.clone();
@@ -731,8 +748,13 @@ async fn subfinder_validates_exact_seed_children_and_keeps_only_resolving_assets
     let outcome = lastest::tasks::subfinder::run(&passive, &ctx)
         .await
         .unwrap();
-    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 4);
-    assert!(outcome.observations.iter().all(|item| item.kind == "host"));
+    assert_eq!(outcome.result["hosts"].as_array().unwrap().len(), 2);
+    assert_eq!(outcome.result["resolve"], true);
+    assert!(outcome
+        .observations
+        .iter()
+        .filter(|item| item.kind == "host")
+        .all(|item| item.data["dns_verified"] == true));
 }
 
 #[tokio::test]
@@ -1011,6 +1033,14 @@ async fn subfinder_treats_dns_absence_as_skipped_and_preserves_operational_error
 #[tokio::test]
 async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() {
     let env = TestEnv::new();
+    let dns = spawn_dns_server(|name, kind| {
+        if name.ends_with(".allowed.test") && kind == 1 {
+            vec![vec![203, 0, 113, 10]]
+        } else {
+            vec![]
+        }
+    })
+    .await;
     let job = make_job("subdomains.discover", json!({"domains":["allowed.test"]}));
     for status in [404, 429, 500] {
         let server = spawn_http_server(move |request| {
@@ -1027,6 +1057,7 @@ async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() 
             Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
             &format!("ct-partial-{status}"),
         );
+        ctx.config.dns_server = Some(dns.addr.to_string());
         ctx.config.certspotter_url =
             format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
         let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
@@ -1041,6 +1072,7 @@ async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() 
         assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
         let server =
             spawn_http_server(move |_| HttpResponse::new(status, "provider failure")).await;
+        ctx.config.dns_server = Some(dns.addr.to_string());
         ctx.config.certspotter_url =
             format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
         let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
@@ -1078,6 +1110,7 @@ async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() 
             Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
             &format!("ct-cursor-{repeated_cursor}"),
         );
+        ctx.config.dns_server = Some(dns.addr.to_string());
         ctx.config.certspotter_url =
             format!("http://127.0.0.1:{}/v1/issuances", server.addr.port());
         let outcome = passive::run_subdomains(&job, &ctx).await.unwrap();
@@ -1092,4 +1125,170 @@ async fn certificate_transparency_keeps_partial_data_and_real_provider_errors() 
             if repeated_cursor { 1 } else { 10 }
         );
     }
+}
+
+#[tokio::test]
+async fn enumeration_modules_publish_only_address_verified_hosts_through_assets_api() {
+    use axum::http::{Method, StatusCode};
+    let env = TestEnv::new();
+    let cookie = env.login_web().await;
+    let dns = spawn_dns_server(|name, kind| match (name, kind) {
+        ("v4.allowed.test", 1) => vec![vec![203, 0, 113, 10]],
+        ("v6.allowed.test", 28) => vec!["2001:db8::1"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets()
+            .to_vec()],
+        ("txtonly.allowed.test", 16) => vec![b"\x07fixture".to_vec()],
+        _ => vec![],
+    })
+    .await;
+    let ct =
+        spawn_http_server(|request| {
+            if request.contains("after=first") {
+                HttpResponse::new(200, "[]")
+            } else {
+                HttpResponse::new(200, json!([{"id":"first","dns_names":[
+            "v4.allowed.test","v6.allowed.test","dead.allowed.test","txtonly.allowed.test",
+            "blocked.allowed.test","outside.test","*.allowed.test","v4.allowed.test"
+        ]}]).to_string())
+            }
+        })
+        .await;
+    let subfinder = env.temp.path().join("subfinder-asset-gate");
+    std::fs::write(&subfinder, "#!/bin/sh\nprintf '%s\\n' v4.allowed.test v6.allowed.test dead.allowed.test txtonly.allowed.test blocked.allowed.test outside.test\n").unwrap();
+    std::fs::set_permissions(&subfinder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dnsmap = fake_dnsmap(env.temp.path());
+    let mut rules = scope_rules(&[("tree", "allowed.test")]);
+    rules.push(
+        lastest::scope::ScopeRule::new(
+            lastest::scope::RuleKind::ExactDomain,
+            "blocked.allowed.test",
+            true,
+        )
+        .unwrap(),
+    );
+    for (task, params) in [
+        (
+            "subdomains.subfinder",
+            json!({"domains":["allowed.test"],"resolve":false}),
+        ),
+        ("subdomains.discover", json!({"domains":["allowed.test"]})),
+        (
+            "dns.records",
+            json!({"targets":["v4.allowed.test","v6.allowed.test","dead.allowed.test","txtonly.allowed.test"],"record_types":["TXT"]}),
+        ),
+        (
+            "dns.wordlist",
+            json!({"domain":"allowed.test","words":["v4","v6","dead","txtonly","blocked"],"concurrency":4}),
+        ),
+    ] {
+        let mut ctx = task_context(
+            &env,
+            Scope::new(rules.clone()).unwrap(),
+            &format!("asset-gate-{task}"),
+        );
+        ctx.config.dns_server = Some(dns.addr.to_string());
+        ctx.config.certspotter_url = format!("http://127.0.0.1:{}/v1/issuances", ct.addr.port());
+        ctx.config.subfinder_path = Some(subfinder.clone());
+        ctx.config.dnsmap_path = Some(dnsmap.clone());
+        lastest::tasks::validate_submission(task, &params, &ctx.config).unwrap();
+        let revision = ctx.db.current_scope(&ctx.project_id).unwrap().unwrap();
+        let queued = ctx
+            .db
+            .enqueue_job(
+                &ctx.project_id,
+                task,
+                &params,
+                &revision.id,
+                revision.version,
+                None,
+                "admin",
+                None,
+                None,
+            )
+            .unwrap();
+        let claim = ctx.db.claim_next_job("asset-gate", 30).unwrap().unwrap();
+        lastest::worker::Worker::new(ctx.config.clone(), ctx.db.clone())
+            .run_claimed(claim.job, claim.attempt_id, ctx.cancel.clone())
+            .await
+            .unwrap();
+        let headers = [("Host", "localhost"), ("Cookie", cookie.as_str())];
+        let job = support::call(
+            &env.app,
+            Method::GET,
+            &format!("/api/jobs/{}", queued.id),
+            None,
+            &headers,
+        )
+        .await;
+        assert_eq!(job.status, StatusCode::OK);
+        assert_eq!(
+            job.body["job"]["status"], "succeeded",
+            "{task}: {}",
+            job.text
+        );
+        assert_eq!(job.body["job"]["counters"]["errors"], 0);
+        let assets = support::call(
+            &env.app,
+            Method::GET,
+            &format!("/api/projects/{}/assets?limit=100", ctx.project_id),
+            None,
+            &headers,
+        )
+        .await;
+        assert_eq!(assets.status, StatusCode::OK);
+        assert_eq!(assets.body["total"], 2, "{task}: {}", assets.text);
+        let rows = assets.body["items"].as_array().unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["host"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["v4.allowed.test", "v6.allowed.test"]
+        );
+        assert_eq!(rows[0]["ips"], json!(["203.0.113.10"]));
+        assert_eq!(rows[1]["ips"], json!(["2001:db8::1"]));
+        let artifact_href = job.body["job"]["artifacts"][0]["href"].as_str().unwrap();
+        let artifact = support::call(&env.app, Method::GET, artifact_href, None, &headers).await;
+        assert_eq!(artifact.status, StatusCode::OK);
+        let result: serde_json::Value = serde_json::from_str(&artifact.text).unwrap();
+        assert!(result["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(
+                |host| host["dns_verified"] == true && !host["ips"].as_array().unwrap().is_empty()
+            ));
+        let rejected = result["rejected"].as_array().unwrap();
+        for host in ["dead.allowed.test", "txtonly.allowed.test"] {
+            assert!(
+                rejected
+                    .iter()
+                    .any(|item| item["host"] == host && item["reason"] == "no_addresses"),
+                "{task}: {result}"
+            );
+        }
+        if task == "subdomains.discover" {
+            assert_eq!(result["wildcards"], json!(["allowed.test"]));
+        }
+        if task == "subdomains.subfinder" {
+            assert_eq!(result["resolve"], true);
+        }
+        if task == "dns.records" {
+            assert_eq!(result["record_types"], json!(["TXT"]));
+            assert!(result["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|record| record["target"] == "txtonly.allowed.test"
+                    && record["type"] == "TXT"
+                    && record["value"] == "fixture"));
+        }
+    }
+    assert!(!dns.queries.lock().unwrap().iter().any(|(name, _)| [
+        "blocked.allowed.test",
+        "outside.test",
+        "allowed.test"
+    ]
+    .contains(&name.as_str())));
 }

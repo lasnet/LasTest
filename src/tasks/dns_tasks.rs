@@ -1,7 +1,7 @@
 use crate::domain::Job;
 use crate::scope::{canonical_ip, normalize_domain};
 use crate::tasks::{
-    dedup_strings, ensure_target_limit, parse_params, provider, TaskContext, TaskOutcome,
+    dedup_strings, discovery, ensure_target_limit, parse_params, provider, TaskContext, TaskOutcome,
 };
 use anyhow::Result;
 use hickory_resolver::proto::rr::RecordType;
@@ -89,6 +89,8 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     let mut outcome = TaskOutcome::new();
     outcome.target(targets.len());
     let mut records = Vec::new();
+    let mut hosts = Vec::new();
+    let mut rejected = Vec::new();
     for raw_target in targets {
         ctx.ensure_active()?;
         let target = raw_target.trim().trim_end_matches('.');
@@ -142,47 +144,20 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             outcome.skipped();
             continue;
         }
-        let mut found = 0usize;
+        let errors_before = outcome.counters.errors;
+        let mut selected = Vec::new();
         for record_type in &types {
             if *record_type == RecordType::PTR {
                 continue;
             }
             ctx.ensure_active()?;
+            if !ctx.allows_host_now(&host) {
+                break;
+            }
             match dns.lookup(&host, *record_type).await {
                 Ok(answers) => {
                     for answer in answers {
-                        found += 1;
-                        let scope_status = if let Ok(ip) = canonical_ip(&answer.value) {
-                            if ctx.scope.allows_ip(ip) {
-                                "allowed"
-                            } else {
-                                "observed"
-                            }
-                        } else {
-                            "observed"
-                        };
-                        outcome.observe(
-                            "dns",
-                            "dns",
-                            "host",
-                            &host,
-                            json!({
-                                "record_type": answer.record_type,
-                                "value": answer.value,
-                                "target": target
-                            }),
-                            scope_status,
-                        );
-                        if let Ok(ip) = canonical_ip(&answer.value) {
-                            outcome.observe(
-                                "dns",
-                                "ip",
-                                "ip",
-                                &ip.to_string(),
-                                json!({"host": host, "record_type": answer.record_type}),
-                                scope_status,
-                            );
-                        }
+                        selected.push(answer.clone());
                         records.push(json!({
                             "target": target,
                             "type": answer.record_type,
@@ -198,52 +173,50 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                 }
             }
         }
-        if found == 0 {
-            outcome.observe(
-                "dns",
-                "dns_empty",
-                "host",
-                &host,
-                json!({"target": target}),
-                "allowed",
-            );
+        let ips = match discovery::resolve_ips(&dns, ctx, &host, &host).await {
+            Ok(ips) => ips,
+            Err(error) => {
+                ctx.ensure_active()?;
+                outcome.skipped();
+                if !ctx.allows_host_now(&host) {
+                    rejected.push(json!({"host":host,"reason":"scope"}));
+                } else if crate::net::dns::is_no_records(&error) {
+                    rejected.push(json!({"host":host,"reason":"no_addresses"}));
+                } else {
+                    let message = crate::net::dns::error_message(&error);
+                    if outcome.counters.errors == errors_before {
+                        outcome.error(format!("DNS {host}: {message}"));
+                    }
+                    rejected.push(json!({"host":host,"reason":"dns_error","error":message}));
+                }
+                continue;
+            }
+        };
+        discovery::observe_host(&mut outcome, ctx, "dns", &host, &host, &ips)?;
+        for answer in selected {
+            // The common publisher already records verified A/AAAA answers.
+            if answer.record_type == "A" || answer.record_type == "AAAA" {
+                continue;
+            }
+            outcome.observe("dns", "dns", "host", &host,
+                json!({"record_type":answer.record_type,"value":answer.value,"target":target,"addresses":ips,"dns_verified":true}),
+                "observed");
         }
+        hosts.push(json!({"host":host,"ips":ips,"dns_verified":true}));
         outcome.processed();
     }
     outcome.result = json!({
         "format_version": "1",
         "targets": outcome.counters.targets,
         "records": records,
+        "hosts": hosts,
+        "rejected": rejected,
+        "dns_verified": true,
         "record_types": types.iter().map(ToString::to_string).collect::<Vec<_>>(),
     });
     let result = outcome.result.clone();
     outcome.add_artifact("dns_records", &format!("{}-dns.json", job.id), &result)?;
     Ok(outcome.finalize())
-}
-
-async fn resolve_discovery_ips(
-    dns: &crate::net::DnsClient,
-    ctx: &TaskContext,
-    domain: &str,
-    host: &str,
-) -> Result<Vec<IpAddr>> {
-    ctx.ensure_active()?;
-    if !crate::tasks::subfinder::allows_discovery_dns(ctx, domain, host)? {
-        anyhow::bail!("DNS discovery host is excluded by scope");
-    }
-    let lookup = dns.resolve_ips(host);
-    tokio::pin!(lookup);
-    loop {
-        tokio::select! {
-            result = &mut lookup => return result,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                ctx.ensure_active()?;
-                if !crate::tasks::subfinder::allows_discovery_dns(ctx, domain, host)? {
-                    anyhow::bail!("DNS discovery scope changed");
-                }
-            }
-        }
-    }
 }
 
 pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
@@ -267,10 +240,10 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             })
             .collect();
         let probe = format!("{label}.{domain}");
-        if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &probe)? {
+        if !discovery::allows_dns(ctx, &domain, &probe)? {
             continue;
         }
-        if let Ok(ips) = resolve_discovery_ips(&dns, ctx, &domain, &probe).await {
+        if let Ok(ips) = discovery::resolve_ips(&dns, ctx, &domain, &probe).await {
             for ip in &ips {
                 wildcard.insert(*ip);
                 wildcard_ips.push(ip.to_string());
@@ -280,6 +253,8 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     wildcard_ips.sort();
     wildcard_ips.dedup();
     let mut found = Vec::new();
+    let mut hosts = Vec::new();
+    let mut rejected = Vec::new();
     let candidates = crate::tasks::dnsmap::discover(&params, &words, ctx).await?;
     let mut lookups = tokio::task::JoinSet::new();
     let mut candidates = candidates.into_iter();
@@ -289,14 +264,14 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                 break;
             };
             ctx.ensure_active()?;
-            if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &candidate)? {
+            if !discovery::allows_dns(ctx, &domain, &candidate)? {
                 continue;
             }
             let dns = dns.clone();
             let ctx = ctx.clone();
             let domain = domain.clone();
             lookups.spawn(async move {
-                let result = resolve_discovery_ips(&dns, &ctx, &domain, &candidate).await;
+                let result = discovery::resolve_ips(&dns, &ctx, &domain, &candidate).await;
                 (candidate, result)
             });
         }
@@ -313,42 +288,37 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         };
         let (candidate, result) = next?;
         ctx.ensure_active()?;
-        if !crate::tasks::subfinder::allows_discovery_dns(ctx, &domain, &candidate)? {
+        if !discovery::allows_dns(ctx, &domain, &candidate)? {
             continue;
         }
         match result {
             Ok(ips) => {
                 if !wildcard.is_empty() && ips.iter().all(|ip| wildcard.contains(ip)) {
                     outcome.skipped();
+                    rejected.push(json!({"host":candidate,"reason":"wildcard","addresses":ips}));
                     continue;
                 }
                 found.push(candidate.clone());
-                outcome.observe(
+                discovery::observe_host(
+                    &mut outcome,
+                    ctx,
                     "dns.wordlist",
-                    "host",
-                    "host",
+                    &domain,
                     &candidate,
-                    json!({"addresses": ips.iter().map(ToString::to_string).collect::<Vec<_>>()}),
-                    "allowed",
-                );
-                for ip in ips {
-                    outcome.observe(
-                        "dns.wordlist",
-                        "ip",
-                        "ip",
-                        &ip.to_string(),
-                        json!({"host": candidate}),
-                        if ctx.scope.allows_ip(ip) {
-                            "allowed"
-                        } else {
-                            "observed"
-                        },
-                    );
-                }
+                    &ips,
+                )?;
+                hosts.push(json!({"host":candidate,"ips":ips,"dns_verified":true}));
                 outcome.processed();
             }
-            Err(_) => {
+            Err(error) => {
                 outcome.skipped();
+                if crate::net::dns::is_no_records(&error) {
+                    rejected.push(json!({"host":candidate,"reason":"no_addresses"}));
+                } else {
+                    let message = crate::net::dns::error_message(&error);
+                    outcome.error(format!("DNS {candidate}: {message}"));
+                    rejected.push(json!({"host":candidate,"reason":"dns_error","error":message}));
+                }
             }
         }
     }
@@ -364,6 +334,9 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         "wordlist": if params.words.is_empty() { params.wordlist.as_str() } else { "custom" },
         "concurrency": params.concurrency,
         "found": found,
+        "hosts": hosts,
+        "rejected": rejected,
+        "dns_verified": true,
         "wildcard_addresses": wildcard_ips,
         "searched": outcome.counters.targets,
     });

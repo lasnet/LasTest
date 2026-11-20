@@ -54,7 +54,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
             params_schema: json!({"type":"object","properties":{
                 "domains":{"type":"array","items":{"type":"string"}},
                 "sources":{"type":"array","items":{"type":"string"}},
-                "resolve":{"type":"boolean"}
+                "resolve":{"type":"boolean","deprecated":true,"description":"Legacy field; A/AAAA verification is always enabled"}
             },"additionalProperties":false}),
             limits: json!({"timeout_seconds":config.subfinder_timeout_seconds,"max_output_bytes":config.max_artifact_bytes}),
             inputs: vec!["approved DNS scope or explicit domains"],
@@ -66,7 +66,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
         },
         TaskTypeInfo {
             name: "subdomains.discover",
-            title: "Passive subdomain discovery (Certificate Transparency)",
+            title: "Certificate Transparency discovery and DNS resolution",
             category: "recon",
             result_format_version: "1",
             available: true,
@@ -82,7 +82,10 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
             }),
             limits: json!({"max_pages_per_domain": 10, "timeout_seconds": config.http_timeout_seconds}),
             inputs: vec!["scope domains or explicit in-scope domains"],
-            outputs: vec!["host observations", "issuance artifact"],
+            outputs: vec![
+                "verified host and IP observations",
+                "issuance and rejection artifact",
+            ],
         },
         TaskTypeInfo {
             name: "dns.records",

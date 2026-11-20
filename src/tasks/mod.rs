@@ -1,5 +1,6 @@
 //! Typed task registry and bounded task implementations.
 
+pub(crate) mod discovery;
 pub mod dns_tasks;
 pub mod dnsmap;
 pub mod http_tasks;

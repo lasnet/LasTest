@@ -1107,7 +1107,7 @@
   const scanModules = [
     { id: "subdomains", title: "Subdomain Enumeration", family: "recon", mode: "Passive Recon", tone: "green",
       tasks: ["subdomains.subfinder", "subdomains.discover", "dns.records", "dns.wordlist"],
-      description: "Find subdomains with Subfinder, Certificate Transparency or a DNS wordlist, and query DNS records for names in Scope. Resolve IP addresses checks Subfinder results for A/AAAA before adding hosts and IPs to Assets. DNS discovery respects Scope exclusions; connection checks use the approved host and IP scope.",
+      description: "Find subdomains with Subfinder, Certificate Transparency or a DNS wordlist, and query DNS records for names in Scope. Only names with confirmed A/AAAA records are added to Assets. Names without addresses stay in job artifacts. Scope exclusions apply.",
       planned: "Subdomain-only ffuf. Subfinder and dnsmap wordlist discovery are available." },
     { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
       tasks: ["reverse.ip"],
@@ -1234,7 +1234,7 @@
   }
 
   function hiddenScanField(task, key) {
-    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && key === "sources")
+    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && ["sources", "resolve"].includes(key))
       || (task.name === "subdomains.discover" && key === "providers")
       || (task.name === "dns.wordlist" && key === "words");
   }
@@ -1288,7 +1288,7 @@
         fields.appendChild(el("p", targets.length ? `${targets.length} ${ipTask ? "IP addresses" : "DNS names"} from project Scope: ${targets.join(", ")}`
           : ipTask ? "No IP address records in Scope. Add allowed IP address records in Scope to use this task. DNS names alone do not authorize IP scanning."
           : "No allowed DNS names in Scope. Add DNS Name records in Scope to use this task.", "muted field-hint"));
-        if (task.name === "subdomains.discover") fields.appendChild(el("p", "Source: Cert Spotter (Certificate Transparency). Finds subdomain names published in TLS certificates without querying the target's DNS.", "muted field-hint"));
+        if (task.name === "subdomains.discover") fields.appendChild(el("p", "Source: Cert Spotter (Certificate Transparency). Finds names published in TLS certificates, then verifies A/AAAA before adding them to Assets.", "muted field-hint"));
         if (task.name === "dns.records") fields.appendChild(el("p", "Query DNS records for names in project Scope. This does not discover subdomains by guessing names. Leave record types empty to query A, AAAA, CNAME, MX, NS and TXT.", "muted field-hint"));
         for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
           if (hiddenScanField(task, key)) continue;
@@ -1327,7 +1327,7 @@
           const help = {
             wordlist: "Full built-in dnsmap wordlist: 989 entries.",
             concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
-            record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Only the selected types are queried.",
+            record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Selected types are saved in the records artifact; A/AAAA are always checked for Assets.",
           };
           if (help[key] && !(subdomainSettings && key === "record_types")) {
             const hint = el("p", help[key], "muted field-hint");

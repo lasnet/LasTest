@@ -1,6 +1,8 @@
 use crate::domain::Job;
 use crate::scope::{canonical_url_key, normalize_domain};
-use crate::tasks::{dedup_strings, ensure_target_limit, provider, TaskContext, TaskOutcome};
+use crate::tasks::{
+    dedup_strings, discovery, ensure_target_limit, provider, TaskContext, TaskOutcome,
+};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -66,6 +68,10 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
     let mut seen: HashSet<String> = HashSet::new();
     let mut wildcards: HashSet<String> = HashSet::new();
     let mut source_status = Vec::new();
+    let mut checked = HashSet::new();
+    let mut hosts = Vec::new();
+    let mut rejected = Vec::new();
+    let dns = ctx.dns()?;
     for raw_domain in domains {
         ctx.ensure_active()?;
         let domain = match normalize_domain(&raw_domain) {
@@ -92,34 +98,48 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                         let Ok(host) = normalize_domain(&name) else {
                             continue;
                         };
+                        // Certificate wildcards are diagnostics, not concrete hosts.
                         if name.starts_with("*.") {
-                            wildcards.insert(host.clone());
-                            outcome.observe(
-                                "certspotter",
-                                "dns_wildcard",
-                                "host",
-                                &host,
-                                json!({"wildcard": name, "domain": domain}),
-                                if ctx.scope.allows_host(&host) {
-                                    "allowed"
+                            wildcards.insert(host);
+                            continue;
+                        }
+                        if seen.contains(&host) || !checked.insert((domain.clone(), host.clone())) {
+                            continue;
+                        }
+                        if !discovery::allows_dns(ctx, &domain, &host)? {
+                            outcome.skipped();
+                            rejected.push(json!({"host":host,"domain":domain,"reason":"scope"}));
+                            continue;
+                        }
+                        let ips = match discovery::resolve_ips(&dns, ctx, &domain, &host).await {
+                            Ok(ips) => ips,
+                            Err(error) => {
+                                ctx.ensure_active()?;
+                                outcome.skipped();
+                                if !discovery::allows_dns(ctx, &domain, &host)? {
+                                    rejected.push(
+                                        json!({"host":host,"domain":domain,"reason":"scope"}),
+                                    );
+                                } else if crate::net::dns::is_no_records(&error) {
+                                    rejected.push(json!({"host":host,"domain":domain,"reason":"no_addresses"}));
                                 } else {
-                                    "denied"
-                                },
-                            );
-                            continue;
-                        }
-                        if !seen.insert(host.clone()) {
-                            continue;
-                        }
-                        let allowed = ctx.scope.allows_host(&host);
-                        outcome.observe(
+                                    let message = crate::net::dns::error_message(&error);
+                                    outcome.error(format!("DNS {host}: {message}"));
+                                    rejected.push(json!({"host":host,"domain":domain,"reason":"dns_error","error":message}));
+                                }
+                                continue;
+                            }
+                        };
+                        discovery::observe_host(
+                            &mut outcome,
+                            ctx,
                             "certspotter",
-                            "host",
-                            "host",
+                            &domain,
                             &host,
-                            json!({"domain": domain}),
-                            if allowed { "allowed" } else { "denied" },
-                        );
+                            &ips,
+                        )?;
+                        seen.insert(host.clone());
+                        hosts.push(json!({"host":host,"ips":ips,"dns_verified":true}));
                     }
                     let mut source = json!({
                         "provider": "certspotter", "domain": domain,
@@ -145,10 +165,18 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
         }
         outcome.processed();
     }
+    let mut subdomains: Vec<_> = seen.into_iter().collect();
+    subdomains.sort();
+    let mut wildcards: Vec<_> = wildcards.into_iter().collect();
+    wildcards.sort();
+    hosts.sort_by(|a, b| a["host"].as_str().cmp(&b["host"].as_str()));
     outcome.result = json!({
         "format_version": "1",
-        "subdomains": seen.iter().cloned().collect::<Vec<_>>(),
-        "wildcards": wildcards.iter().cloned().collect::<Vec<_>>(),
+        "subdomains": subdomains,
+        "hosts": hosts,
+        "rejected": rejected,
+        "dns_verified": true,
+        "wildcards": wildcards,
         "sources": source_status,
     });
     let result = outcome.result.clone();
