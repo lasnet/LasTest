@@ -678,6 +678,24 @@ dialog .button-row { justify-content: flex-end; }
 .scan-task-fields { display: grid; gap: 12px; margin: 9px 0; }
 .scan-task-settings .field-hint { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .scan-planned { padding-top: 12px; border-top: 1px solid var(--rule); }
+.scan-subdomain-settings .scan-task-settings { padding: 10px 18px 14px; }
+.scan-subdomain-settings .scan-task-settings legend { padding-inline: 5px; }
+.scan-subdomain-settings .scan-task-fields { margin: 0 20px 0 28px; gap: 10px; }
+.scan-subdomain-settings .scan-task-settings .field-hint { margin-top: 0; font-size: 13px; }
+.scan-subdomain-settings .subdomain-setting-resolve { margin-left: -26px; gap: 10px; }
+.scan-subdomain-settings .subdomain-setting-resolve .field-hint { margin-left: 26px; }
+.scan-subdomain-settings .subdomain-setting-concurrency,
+.scan-subdomain-settings .subdomain-setting-wordlist { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px 12px; }
+.scan-subdomain-settings .subdomain-setting-concurrency select { width: 54px; min-height: 30px; padding: 2px 6px; }
+.scan-subdomain-settings .subdomain-setting-concurrency .field-hint { grid-column: 1 / -1; }
+.scan-subdomain-settings .subdomain-setting-wordlist { grid-template-columns: max-content minmax(120px, 200px) minmax(0, 1fr); }
+.scan-subdomain-settings .subdomain-setting-wordlist select { min-height: 30px; padding: 2px 6px; }
+@media (max-width: 600px) {
+  .scan-subdomain-settings .scan-task-settings { padding-inline: 10px; }
+  .scan-subdomain-settings .scan-task-fields { margin-right: 0; }
+  .scan-subdomain-settings .subdomain-setting-wordlist { grid-template-columns: max-content minmax(0, 1fr); }
+  .scan-subdomain-settings .subdomain-setting-wordlist .field-hint { grid-column: 1 / -1; }
+}
 @media (max-width: 1100px) {
   .scans-layout { grid-template-columns: minmax(0, 1fr); }
   .scan-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }

@@ -1252,6 +1252,8 @@
   }
 
   function openScanDialog(module, action) {
+    const subdomainSettings = module.id === "subdomains" && action === "settings";
+    $("#scan-module-dialog").classList.toggle("scan-subdomain-settings", subdomainSettings);
     settingsModule = action === "settings" ? module : null;
     $("#scan-dialog-title").textContent = `${module.title} · ${action === "settings" ? "Settings" : "Information"}`;
     $("#scan-settings-error").textContent = "";
@@ -1287,10 +1289,11 @@
           : ipTask ? "No IP address records in Scope. Add allowed IP address records in Scope to use this task. DNS names alone do not authorize IP scanning."
           : "No allowed DNS names in Scope. Add DNS Name records in Scope to use this task.", "muted field-hint"));
         if (task.name === "subdomains.discover") fields.appendChild(el("p", "Source: Cert Spotter (Certificate Transparency). Finds subdomain names published in TLS certificates without querying the target's DNS.", "muted field-hint"));
-        if (task.name === "dns.records") fields.appendChild(el("p", "Query DNS records for names in project Scope. This does not discover subdomains by guessing names. Leave record types empty to query A, AAAA, CNAME, MX, NS and TXT. PTR applies only to explicit IP targets via API/CLI.", "muted field-hint"));
+        if (task.name === "dns.records") fields.appendChild(el("p", "Query DNS records for names in project Scope. This does not discover subdomains by guessing names. Leave record types empty to query A, AAAA, CNAME, MX, NS and TXT.", "muted field-hint"));
         for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
           if (hiddenScanField(task, key)) continue;
           const field = el("div", null, "field");
+          if (subdomainSettings) field.classList.add(`subdomain-setting-${key}`);
           const id = `scan-setting-${task.name.replaceAll(".", "-")}-${key}`;
           const label = el("label", scanFieldLabels[key] || key);
           label.htmlFor = id;
@@ -1307,7 +1310,7 @@
             } else {
               if (property.type === "integer") { input.type = "number"; input.min = property.minimum ?? 0; }
               input.value = Array.isArray(params[key]) ? params[key].join(input.tagName === "TEXTAREA" ? "\n" : ", ") : params[key] ?? "";
-              if (input.tagName === "TEXTAREA") input.rows = 2;
+              if (input.tagName === "TEXTAREA") input.rows = subdomainSettings ? 1 : 2;
               input.placeholder = task.params_schema.required?.includes(key) ? "Required" : "Use task defaults";
             }
           }
@@ -1326,7 +1329,7 @@
             concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
             record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Only the selected types are queried.",
           };
-          if (help[key]) {
+          if (help[key] && !(subdomainSettings && key === "record_types")) {
             const hint = el("p", help[key], "muted field-hint");
             hint.id = `${id}-hint`;
             input.setAttribute("aria-describedby", hint.id);
@@ -1340,7 +1343,7 @@
           fields.appendChild(field);
         }
         section.appendChild(fields);
-        if (Object.keys(task.limits).length) section.appendChild(el("p", `Limits · ${Object.entries(task.limits).map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`).join(" · ")}`, "muted field-hint"));
+        if (!subdomainSettings && Object.keys(task.limits).length) section.appendChild(el("p", `Limits · ${Object.entries(task.limits).map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`).join(" · ")}`, "muted field-hint"));
         content.appendChild(section);
       }
     }
