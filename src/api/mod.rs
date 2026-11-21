@@ -4,6 +4,7 @@ pub mod admin;
 pub mod assets;
 pub mod auth_routes;
 pub mod dashboard;
+pub mod discovery;
 pub mod jobs;
 pub mod projects;
 pub mod static_ui;
@@ -236,6 +237,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/auth/logout", post(auth_routes::logout))
         .route("/api/auth/me", get(auth_routes::me))
         .route("/api/task-types", get(jobs::task_types))
+        .route("/api/providers", get(jobs::providers))
         .route("/api/projects", get(projects::list).post(projects::create))
         .route("/api/projects/{id}", get(projects::get_one))
         .route(
@@ -259,6 +261,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/chains/{id}", get(jobs::get_chain))
         .route("/api/chains/{id}/cancel", post(jobs::cancel_chain))
         .route("/api/projects/{id}/dashboard", get(dashboard::dashboard))
+        .route(
+            "/api/projects/{id}/discovery/candidates",
+            get(discovery::list),
+        )
+        .route(
+            "/api/projects/{id}/discovery/candidates/{candidate_id}",
+            get(discovery::detail),
+        )
+        .route(
+            "/api/projects/{id}/discovery/export/{format}",
+            get(discovery::export),
+        )
         .route("/api/projects/{id}/assets", get(assets::list))
         .route(
             "/api/projects/{id}/assets/export/{format}",
@@ -266,7 +280,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/projects/{id}/assets/{asset_id}",
-            axum::routing::delete(assets::delete),
+            get(assets::detail).delete(assets::delete),
         )
         .route("/api/evidence/{id}", get(jobs::get_evidence))
         .route(

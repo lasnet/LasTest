@@ -179,6 +179,7 @@ pub async fn run_probe(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                         "server": fetch.header("server").unwrap_or(""),
                         "content_type": fetch.content_type(),
                         "technologies": technologies,
+                        "cookie_names": cookie_names(&fetch),
                         "tls_cert_not_after": cert,
                         "redirects": fetch.redirects,
                         "body_truncated": fetch.truncated,
@@ -540,66 +541,20 @@ pub fn extract_links(body: &str) -> Vec<String> {
 }
 
 pub fn detect_technologies(fetch: &crate::net::http::FetchResult) -> Vec<Value> {
-    let mut items = Vec::new();
-    let mut push = |name: &str, version: Option<String>, source: &str| {
-        items.push(json!({
-            "name": name,
-            "version": version,
-            "source": source,
-            "catalog_version": 1
-        }));
-    };
-    if let Some(server) = fetch.header("server") {
-        let lower = server.to_ascii_lowercase();
-        for (name, marker) in [
-            ("nginx", "nginx"),
-            ("apache", "apache"),
-            ("cloudflare", "cloudflare"),
-            ("microsoft-iis", "microsoft-iis"),
-            ("caddy", "caddy"),
-        ] {
-            if lower.contains(marker) {
-                let version = server
-                    .split('/')
-                    .nth(1)
-                    .and_then(|value| value.split_whitespace().next())
-                    .map(str::to_string);
-                push(name, version, "header:server");
-            }
-        }
-    }
-    if let Some(powered) = fetch.header("x-powered-by") {
-        push(
-            powered.split('/').next().unwrap_or(powered),
-            powered.split('/').nth(1).map(str::to_string),
-            "header:x-powered-by",
-        );
-    }
-    if let Some(cookie) = fetch
+    crate::tasks::tech_catalog::detect(fetch)
+}
+
+/// Cookie names only; values are deliberately never stored.
+pub fn cookie_names(fetch: &crate::net::http::FetchResult) -> Vec<String> {
+    fetch
         .header_values("set-cookie")
-        .first()
-        .map(|value| value.to_ascii_lowercase())
-    {
-        if cookie.contains("phpsessid") {
-            push("php", None, "cookie");
-        }
-        if cookie.contains("jsessionid") {
-            push("java", None, "cookie");
-        }
-    }
-    let body_lower = fetch.body.to_ascii_lowercase();
-    if body_lower.contains("wp-content/") || body_lower.contains("wordpress") {
-        push("wordpress", None, "body");
-    }
-    if body_lower.contains("_next/static") {
-        push("next.js", None, "body");
-    }
-    if body_lower.contains("ng-version") {
-        push("angular", None, "body");
-    }
-    items.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    items.dedup_by(|a, b| a["name"] == b["name"]);
-    items
+        .iter()
+        .filter_map(|value| value.split('=').next())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub fn normalize_host_target(value: &str) -> Result<String> {

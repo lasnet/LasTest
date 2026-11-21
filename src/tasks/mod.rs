@@ -1,5 +1,7 @@
 //! Typed task registry and bounded task implementations.
 
+pub mod asset_classify;
+pub mod asset_enrich;
 pub(crate) mod discovery;
 pub mod dns_tasks;
 pub mod dnsmap;
@@ -8,8 +10,10 @@ pub mod network;
 pub mod nmap;
 pub mod passive;
 pub mod provider;
+pub mod providers;
 pub mod registry;
 pub mod subfinder;
+pub mod tech_catalog;
 pub mod web_checks;
 
 use crate::config::Config;
@@ -44,6 +48,9 @@ pub struct TaskOutcome {
     pub findings: Vec<NewFinding>,
     pub artifacts: Vec<TaskArtifact>,
     pub errors: Vec<String>,
+    pub candidates: Vec<crate::domain::NewCandidate>,
+    pub enrichments: Vec<crate::domain::NewEnrichment>,
+    pub classifications: Vec<crate::domain::NewClassification>,
 }
 
 impl TaskOutcome {
@@ -57,6 +64,9 @@ impl TaskOutcome {
             findings: Vec::new(),
             artifacts: Vec::new(),
             errors: Vec::new(),
+            candidates: Vec::new(),
+            enrichments: Vec::new(),
+            classifications: Vec::new(),
         }
     }
 
@@ -136,6 +146,18 @@ impl TaskOutcome {
         });
     }
 
+    pub fn candidate(&mut self, candidate: crate::domain::NewCandidate) {
+        self.candidates.push(candidate);
+    }
+
+    pub fn enrichment(&mut self, enrichment: crate::domain::NewEnrichment) {
+        self.enrichments.push(enrichment);
+    }
+
+    pub fn classification(&mut self, classification: crate::domain::NewClassification) {
+        self.classifications.push(classification);
+    }
+
     pub fn add_artifact<T: Serialize>(
         &mut self,
         kind: &str,
@@ -196,6 +218,10 @@ pub struct TaskContext {
     pub scope: EffectiveScope,
     pub cancel: Arc<AtomicBool>,
     pub previous_job: Option<Job>,
+    /// Committed input jobs for this stage. For legacy chains this is the
+    /// immediate predecessor; explicit `input_refs` select several stages of
+    /// the same run.
+    pub input_jobs: Vec<Job>,
 }
 
 impl TaskContext {
@@ -227,6 +253,9 @@ impl TaskContext {
     }
 
     pub fn authorize_url_now(&self, url: &url::Url) -> bool {
+        if self.ensure_active().is_err() {
+            return false;
+        }
         let Some(host) = url.host_str() else {
             return false;
         };
@@ -270,11 +299,45 @@ impl TaskContext {
     }
 
     pub fn chain_input_observations(&self, kind: &str) -> Result<Vec<crate::domain::Observation>> {
-        let Some(previous) = &self.previous_job else {
-            return Ok(Vec::new());
-        };
-        let items = self.db.observations_for_job(&previous.id)?;
-        Ok(items.into_iter().filter(|item| item.kind == kind).collect())
+        let mut items = Vec::new();
+        for job in &self.input_jobs {
+            let observations = self.db.observations_for_job(&job.id)?;
+            items.extend(observations.into_iter().filter(|item| item.kind == kind));
+        }
+        Ok(items)
+    }
+
+    /// Candidates published by committed input stages of this chain run.
+    pub fn chain_input_candidates(&self) -> Result<Vec<Value>> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for job in self.input_jobs.iter().rev() {
+            for candidate in self.db.candidates_for_job(&job.id)? {
+                let host = candidate
+                    .get("hostname")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if !host.is_empty() && seen.insert(host) {
+                    out.push(candidate);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Explicit chain inputs are immutable published snapshots, not a read of
+    /// whichever neighbouring run most recently updated the project.
+    pub fn observations_for_host(&self, host: &str) -> Result<Vec<Value>> {
+        let mut rows = self.db.observations_for_host(&self.project_id, host)?;
+        if !self.input_jobs.is_empty() {
+            rows.retain(|row| {
+                row["job_id"]
+                    .as_str()
+                    .is_some_and(|id| self.input_jobs.iter().any(|job| job.id == id))
+            });
+        }
+        Ok(rows)
     }
 }
 
@@ -293,6 +356,8 @@ pub async fn execute(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         "web.checks" => web_checks::run(job, ctx).await,
         "tcp.connect" => network::run_tcp(job, ctx).await,
         "nmap.profile" => nmap::run(job, ctx).await,
+        "assets.enrich" => asset_enrich::run(job, ctx).await,
+        "assets.classify" => asset_classify::run(job, ctx).await,
         other => Err(anyhow::anyhow!("unsupported task type: {other}")).context("task registry"),
     }
 }
@@ -348,7 +413,7 @@ fn ensure_keys(params: &Value, allowed: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn string_list(params: &Value, key: &str) -> Result<Vec<String>> {
+pub(crate) fn string_list(params: &Value, key: &str) -> Result<Vec<String>> {
     params_strings(params, key)
 }
 
@@ -372,7 +437,7 @@ pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> 
         }
         "dns.wordlist" => dnsmap::validate(params, config)?,
         "reverse.ip" => {
-            ensure_keys(params, &["ips", "providers"])?;
+            ensure_keys(params, &["ips", "providers", "sources"])?;
             let ips = string_list(params, "ips")?;
             if ips.is_empty() || ips.len() > 128 {
                 anyhow::bail!("reverse.ip requires 1-128 explicit IP addresses");
@@ -380,9 +445,70 @@ pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> 
             for ip in ips {
                 canonical_ip(&ip)?;
             }
+            let has_providers = params.get("providers").is_some();
+            let has_sources = params.get("sources").is_some();
+            if has_providers && has_sources {
+                anyhow::bail!("reverse.ip accepts either sources or legacy providers, not both");
+            }
+            if let Some(value) = params.get("sources") {
+                let sources: Vec<String> = serde_json::from_value(value.clone())
+                    .context("sources must be an array of strings")?;
+                if dedup_strings(&sources).is_empty() {
+                    anyhow::bail!("reverse.ip sources must not be empty");
+                }
+                for source in dedup_strings(&sources) {
+                    if !matches!(source.as_str(), "ptr" | "shodan_internetdb" | "censys") {
+                        anyhow::bail!("unsupported reverse IP source: {source}");
+                    }
+                }
+            }
             for provider in string_list(params, "providers")? {
                 if !matches!(provider.as_str(), "shodan_internetdb" | "censys") {
                     anyhow::bail!("unsupported reverse IP provider: {provider}");
+                }
+            }
+        }
+        "assets.enrich" => {
+            ensure_keys(
+                params,
+                &["candidate_ids", "asset_ids", "http_enrichment", "limit"],
+            )?;
+            let count = string_list(params, "candidate_ids")?.len()
+                + string_list(params, "asset_ids")?.len();
+            if count
+                > config
+                    .max_discovery_candidates
+                    .min(config.max_queue_targets)
+            {
+                anyhow::bail!("too many selected discovery targets");
+            }
+            if let Some(limit) = params.get("limit") {
+                let limit = limit.as_u64().context("limit must be a positive integer")?;
+                if limit == 0 || limit > config.max_queue_targets as u64 {
+                    anyhow::bail!("limit exceeds the configured target limit");
+                }
+            }
+            if let Some(value) = params.get("http_enrichment") {
+                if value.as_bool().is_none() {
+                    anyhow::bail!("http_enrichment must be a boolean");
+                }
+            }
+        }
+        "assets.classify" => {
+            ensure_keys(params, &["candidate_ids", "asset_ids", "limit"])?;
+            let count = string_list(params, "candidate_ids")?.len()
+                + string_list(params, "asset_ids")?.len();
+            if count
+                > config
+                    .max_discovery_candidates
+                    .min(config.max_queue_targets)
+            {
+                anyhow::bail!("too many selected discovery targets");
+            }
+            if let Some(limit) = params.get("limit") {
+                let limit = limit.as_u64().context("limit must be a positive integer")?;
+                if limit == 0 || limit > config.max_queue_targets as u64 {
+                    anyhow::bail!("limit exceeds the configured target limit");
                 }
             }
         }

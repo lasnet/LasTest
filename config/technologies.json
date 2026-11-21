@@ -1,17 +1,38 @@
 {
-  "catalog_version": 1,
-  "description": "Bounded technology hints stored with each HTTP observation. This is not a full fingerprinting engine.",
+  "catalog_version": 2,
+  "description": "Bounded technology hints stored with each HTTP observation. This is not a full fingerprinting engine. Detection uses stored headers, all Set-Cookie headers and a bounded response body; it never starts extra requests.",
   "rules": [
     {"name": "nginx", "source": "header:server", "match": "server contains nginx"},
     {"name": "apache", "source": "header:server", "match": "server contains apache"},
     {"name": "cloudflare", "source": "header:server", "match": "server contains cloudflare"},
     {"name": "microsoft-iis", "source": "header:server", "match": "server contains microsoft-iis"},
     {"name": "caddy", "source": "header:server", "match": "server contains caddy"},
+    {"name": "atlassian", "source": "header:server", "match": "server contains atlassian"},
+    {"name": "jira", "source": "header:server", "match": "server contains Atlassian Jira"},
+    {"name": "jira", "source": "header", "match": "x-arequestid, x-asessionid or x-seraph-loginreason is present"},
+    {"name": "jira", "source": "cookie", "match": "Jira-specific session or CSRF cookie name is present"},
+    {"name": "jira", "source": "body", "match": "body contains com.atlassian.jira"},
+    {"name": "grafana", "source": "header", "match": "x-grafana-org-id is present"},
+    {"name": "grafana", "source": "cookie", "match": "Set-Cookie contains grafana_sess"},
+    {"name": "grafana", "source": "body", "match": "body contains grafana-app or window.grafanaBootData"},
+    {"name": "spring", "source": "header", "match": "x-application-context is present"},
+    {"name": "spring", "source": "body", "match": "body contains org.springframework, spring-boot or Whitelabel Error Page"},
+    {"name": "tilda", "source": "header", "match": "x-tilda-server is present"},
     {"name": "x-powered-by", "source": "header:x-powered-by", "match": "product and version when present"},
-    {"name": "php", "source": "cookie", "match": "Set-Cookie contains PHPSESSID"},
-    {"name": "java", "source": "cookie", "match": "Set-Cookie contains JSESSIONID"},
-    {"name": "wordpress", "source": "body", "match": "body contains wp-content or wordpress"},
+    {"name": "php", "source": "cookie", "match": "any Set-Cookie contains PHPSESSID"},
+    {"name": "java", "source": "cookie", "match": "any Set-Cookie contains JSESSIONID; Java alone is not Spring"},
+    {"name": "wordpress", "source": "body", "match": "body contains wp-content, wp-includes or wordpress"},
     {"name": "next.js", "source": "body", "match": "body contains _next/static"},
-    {"name": "angular", "source": "body", "match": "body contains ng-version"}
-  ]
+    {"name": "angular", "source": "body", "match": "body contains ng-version"},
+    {"name": "express", "source": "header:x-powered-by", "match": "X-Powered-By is Express"}
+  ],
+  "groups": {
+    "wordpress": ["wordpress"],
+    "jira": ["jira"],
+    "grafana": ["grafana"],
+    "nginx": ["nginx"],
+    "php": ["php"],
+    "spring": ["spring"],
+    "unknown": "no current catalog group matched"
+  }
 }

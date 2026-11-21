@@ -133,6 +133,9 @@ async fn queued_and_running_cancellation() {
         observations: Vec::new(),
         findings: Vec::new(),
         artifacts: Vec::new(),
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     assert!(env
         .db
@@ -173,6 +176,9 @@ async fn expired_lease_interrupts_and_stale_attempt_cannot_publish() {
         }],
         findings: Vec::new(),
         artifacts: Vec::new(),
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     assert!(!env
         .db
@@ -224,6 +230,9 @@ async fn publication_is_atomic_and_indexed() {
             size: 2,
             sha256: "digest".to_string(),
         }],
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     assert!(env
         .db
@@ -245,6 +254,9 @@ async fn publication_is_atomic_and_indexed() {
         observations: Vec::new(),
         findings: Vec::new(),
         artifacts: Vec::new(),
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     assert!(!env
         .db
@@ -463,6 +475,9 @@ async fn chain_stage_is_skipped_after_failed_predecessor() {
         observations: Vec::new(),
         findings: Vec::new(),
         artifacts: Vec::new(),
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     env.db
         .complete_attempt(&first.id, &claim.attempt_id, outcome)
@@ -537,6 +552,9 @@ async fn chain_stage_consumes_published_results_from_previous_job() {
         }],
         findings: Vec::new(),
         artifacts: Vec::new(),
+        candidates: Vec::new(),
+        enrichments: Vec::new(),
+        classifications: Vec::new(),
     };
     env.db
         .complete_attempt(&first.id, &claim.attempt_id, outcome)

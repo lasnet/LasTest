@@ -36,9 +36,17 @@ fn empty_object() -> Value {
 pub struct ChainBody {
     pub name: Option<String>,
     #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
     pub domains: Vec<String>,
     #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub ips: Vec<String>,
+    #[serde(default)]
+    pub sources: Option<Vec<String>>,
+    #[serde(default)]
+    pub http_enrichment: bool,
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
@@ -97,11 +105,7 @@ pub async fn task_types(
     Ok(Json(json!({
         "task_types": registry::task_types(&state.config),
         "web_check_rules": crate::tasks::web_checks::rules_catalog(),
-        "providers": {
-            "certspotter": {"configured": true, "token_configured": state.config.certspotter_token.is_some()},
-            "shodan_internetdb": {"configured": true, "requires_key": false},
-            "censys": {"configured": state.config.censys_api_id.is_some() && state.config.censys_api_secret.is_some(), "requires_key": true}
-        },
+        "providers": state.config.provider_catalog(),
         "excluded": [
             "full Nuclei template language and template catalog",
             "browser/JavaScript crawling",
@@ -116,6 +120,19 @@ pub async fn task_types(
             "max_body_bytes": state.config.max_body_bytes,
             "tls_expiry_warning_days": state.config.tls_expiry_warning_days
         }
+    })))
+}
+
+pub async fn providers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Viewer)?;
+    Ok(Json(json!({
+        "providers": state.config.provider_catalog(),
+        "http_enrichment_default": false,
+        "note": "Provider credentials belong to the LasTest installation and are never accepted in task params or project settings."
     })))
 }
 
@@ -184,6 +201,34 @@ pub async fn submit_job(
         .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
     tasks::validate_scope_targets(&body.task_type, &body.params, &scope.scope, &state.config)
         .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+    if matches!(body.task_type.as_str(), "assets.enrich" | "assets.classify") {
+        for id in tasks::string_list(&body.params, "candidate_ids").map_err(ApiError::internal)? {
+            if state
+                .db
+                .candidate_by_id_raw(&project.id, &id)
+                .map_err(ApiError::internal)?
+                .is_none()
+            {
+                return Err(ApiError::bad_request(
+                    "invalid_target",
+                    "candidate not found in this project",
+                ));
+            }
+        }
+        for id in tasks::string_list(&body.params, "asset_ids").map_err(ApiError::internal)? {
+            if state
+                .db
+                .asset_detail(&project.id, &id)
+                .map_err(ApiError::internal)?
+                .is_none()
+            {
+                return Err(ApiError::bad_request(
+                    "invalid_target",
+                    "asset not found in this project",
+                ));
+            }
+        }
+    }
     let key = body
         .idempotency_key
         .as_deref()
@@ -273,7 +318,14 @@ pub async fn submit_chain(
     require(&session, Role::Analyst)?;
     validate_origin(&Method::POST, &headers, Some(&session))?;
     let project = resolve_project(&state, &id)?;
-    let params = json!({"domains": body.domains, "targets": body.targets});
+    let params = json!({
+        "domains": body.domains,
+        "targets": body.targets,
+        "ips": body.ips,
+        "sources": body.sources,
+        "http_enrichment": body.http_enrichment,
+        "preset": body.preset,
+    });
     let value = submit_chain_internal(
         &state,
         &session,
@@ -294,20 +346,19 @@ async fn submit_chain_internal(
     name: Option<&str>,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
-    let domains: Vec<String> = params
-        .get("domains")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|_| ApiError::bad_request("invalid_params", "domains must be strings"))?
-        .unwrap_or_default();
-    let targets: Vec<String> = params
-        .get("targets")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|_| ApiError::bad_request("invalid_params", "targets must be strings"))?
-        .unwrap_or_default();
+    let preset = params
+        .get("preset")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(preset) = preset {
+        if preset != "asset_discovery" {
+            return Err(ApiError::bad_request(
+                "invalid_preset",
+                "unsupported chain preset; use asset_discovery or omit preset",
+            ));
+        }
+    }
     let scope = state
         .db
         .current_scope(&project.id)
@@ -319,52 +370,161 @@ async fn submit_chain_internal(
             "the current scope revision must be approved before chains can be submitted",
         ));
     }
-    let target_params = json!({"targets": targets, "domains": domains});
-    tasks::validate_scope_targets("http.probe", &target_params, &scope.scope, &state.config)
-        .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
     let key = idempotency_key.filter(|value| !value.trim().is_empty());
+    if key.is_some_and(|value| value.len() > 200) {
+        return Err(ApiError::bad_request(
+            "invalid_idempotency_key",
+            "idempotency key is too long",
+        ));
+    }
+    let stage_inputs: Vec<(String, Value, Vec<i64>)>;
+    let run_name;
+    if preset == Some("asset_discovery") {
+        let sources: Vec<String> = params
+            .get("sources")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| ApiError::bad_request("invalid_params", "sources must be strings"))?
+            .unwrap_or_else(|| vec!["ptr".to_string(), "shodan_internetdb".to_string()]);
+        if sources.is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_params",
+                "Asset Discovery requires at least one source",
+            ));
+        }
+        let mut ips: Vec<String> = params
+            .get("ips")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| ApiError::bad_request("invalid_params", "ips must be strings"))?
+            .unwrap_or_default();
+        if ips.is_empty() {
+            ips = scope
+                .scope
+                .rules
+                .iter()
+                .filter(|rule| {
+                    !rule.exclusion
+                        && rule.kind == crate::scope::RuleKind::Ip
+                        && crate::scope::canonical_ip(&rule.value)
+                            .is_ok_and(|ip| scope.scope.allows_ip(ip))
+                })
+                .map(|rule| rule.value.clone())
+                .collect();
+        }
+        ips = tasks::dedup_strings(&ips);
+        if ips.is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_target",
+                "Asset Discovery needs explicit IP address records in the approved Scope",
+            ));
+        }
+        let reverse_params = json!({"ips": ips, "sources": sources});
+        tasks::validate_submission("reverse.ip", &reverse_params, &state.config)
+            .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
+        tasks::validate_scope_targets("reverse.ip", &reverse_params, &scope.scope, &state.config)
+            .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+        let http_enrichment = params
+            .get("http_enrichment")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        run_name = name.unwrap_or("Asset Discovery").to_string();
+        stage_inputs = vec![
+            ("reverse.ip".to_string(), reverse_params, Vec::new()),
+            (
+                "assets.enrich".to_string(),
+                json!({"http_enrichment": http_enrichment}),
+                vec![1],
+            ),
+            ("assets.classify".to_string(), json!({}), vec![1, 2]),
+        ];
+    } else {
+        let domains: Vec<String> = params
+            .get("domains")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| ApiError::bad_request("invalid_params", "domains must be strings"))?
+            .unwrap_or_default();
+        let targets: Vec<String> = params
+            .get("targets")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| ApiError::bad_request("invalid_params", "targets must be strings"))?
+            .unwrap_or_default();
+        let target_params = json!({"targets": targets, "domains": domains});
+        tasks::validate_scope_targets("http.probe", &target_params, &scope.scope, &state.config)
+            .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+        run_name = name.unwrap_or("All in one").to_string();
+        stage_inputs = vec![
+            (
+                "subdomains.discover".to_string(),
+                json!({"domains": domains, "providers": ["certspotter"]}),
+                Vec::new(),
+            ),
+            ("dns.records".to_string(), json!({}), Vec::new()),
+            (
+                "http.probe".to_string(),
+                json!({"targets": targets, "mode": if targets.iter().any(|value| value.contains("://")) { "url" } else { "root" }}),
+                Vec::new(),
+            ),
+            (
+                "urls.passive".to_string(),
+                json!({"domains": domains}),
+                Vec::new(),
+            ),
+            ("http.crawl".to_string(), json!({}), Vec::new()),
+            (
+                "web.checks".to_string(),
+                json!({"targets": targets.iter().filter(|value| value.starts_with("https://")).cloned().collect::<Vec<_>>()}),
+                Vec::new(),
+            ),
+        ];
+    }
     if let Some(key) = key {
         if let Some(existing) = state
             .db
             .chain_run_by_idempotency(&project.id, key)
             .map_err(ApiError::internal)?
         {
-            let value = state
+            let chain = state
                 .db
                 .chain_run_json(&existing)
                 .map_err(ApiError::internal)?
                 .ok_or_else(|| ApiError::internal("chain disappeared"))?;
-            return Ok(json!({"chain": value, "idempotent_replay": true}));
+            let jobs = state.db.chain_jobs(&existing).map_err(ApiError::internal)?;
+            if chain["preset"].as_str() != preset
+                || chain["name"].as_str() != Some(run_name.as_str())
+                || jobs.len() != stage_inputs.len()
+                || jobs
+                    .iter()
+                    .zip(&stage_inputs)
+                    .any(|(job, (task, params, _))| job.task_type != *task || job.params != *params)
+            {
+                return Err(ApiError::conflict(
+                    "idempotency_conflict",
+                    "idempotency key was already used with different chain inputs",
+                ));
+            }
+            return Ok(json!({"chain": chain, "idempotent_replay": true}));
         }
     }
     let run_id = state
         .db
-        .create_chain_run(
-            &project.id,
-            name.unwrap_or("All in one"),
-            key,
-            &session.user.username,
-        )
+        .create_chain_run(&project.id, &run_name, key, &session.user.username)
         .map_err(ApiError::internal)?;
-    let stages: Vec<(&str, Value)> = vec![
-        (
-            "subdomains.discover",
-            json!({"domains": domains, "providers": ["certspotter"]}),
-        ),
-        ("dns.records", json!({})),
-        (
-            "http.probe",
-            json!({"targets": targets, "mode": if targets.iter().any(|value| value.contains("://")) { "url" } else { "root" }}),
-        ),
-        ("urls.passive", json!({"domains": domains})),
-        ("http.crawl", json!({})),
-        (
-            "web.checks",
-            json!({"targets": targets.iter().filter(|value| value.starts_with("https://")).cloned().collect::<Vec<_>>()}),
-        ),
-    ];
+    if let Some(preset) = preset {
+        state
+            .db
+            .set_chain_preset(&run_id, preset)
+            .map_err(ApiError::internal)?;
+    }
     let mut jobs = Vec::new();
-    for (position, (task_type, stage_params)) in stages.iter().enumerate() {
+    for (position, (task_type, stage_params, input_refs)) in stage_inputs.iter().enumerate() {
         let position = position as i64 + 1;
         if let Err(err) = state
             .db
@@ -372,6 +532,12 @@ async fn submit_chain_internal(
         {
             let _ = state.db.cancel_chain(&run_id, &session.user.username);
             return Err(ApiError::internal(err));
+        }
+        if !input_refs.is_empty() {
+            state
+                .db
+                .set_chain_stage_input_refs(&run_id, position, input_refs)
+                .map_err(ApiError::internal)?;
         }
         let queued = state
             .db

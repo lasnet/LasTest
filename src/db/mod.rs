@@ -3,9 +3,11 @@
 //! immediate transaction so API and worker can start concurrently.
 
 pub mod assets;
+pub mod discovery;
 pub mod import;
 pub mod jobs;
 pub mod projects;
+pub mod provider_cache;
 pub mod users;
 
 use anyhow::{Context, Result};
@@ -14,10 +16,11 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../migrations/0001_init.sql")),
     (2, include_str!("../../migrations/0002_setup_code.sql")),
+    (3, include_str!("../../migrations/0003_asset_discovery.sql")),
 ];
 
 #[derive(Clone, Debug)]

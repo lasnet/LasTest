@@ -5,6 +5,7 @@
 
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 
 pub fn now_rfc3339() -> String {
@@ -253,4 +254,169 @@ pub struct Paged<T> {
     pub total: u64,
     pub limit: u32,
     pub offset: u32,
+}
+
+/// A discovery candidate publication produced by a task. The worker stores it
+/// atomically with the owning attempt; tasks never write project results
+/// directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewCandidate {
+    pub hostname: String,
+    pub source: String,
+    #[serde(default)]
+    pub source_ip: Option<String>,
+    /// `ptr`, `provider_name`, `dns_check`, `http` and similar evidence kinds.
+    pub data_type: String,
+    #[serde(default)]
+    pub dns_status: Option<String>,
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub ip_match: Option<String>,
+    #[serde(default = "observed_scope_status")]
+    pub scope_status: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub details: Value,
+}
+
+fn observed_scope_status() -> String {
+    "observed".to_string()
+}
+
+impl NewCandidate {
+    pub fn new(hostname: &str, source: &str, data_type: &str) -> Self {
+        Self {
+            hostname: hostname.to_string(),
+            source: source.to_string(),
+            source_ip: None,
+            data_type: data_type.to_string(),
+            dns_status: None,
+            addresses: Vec::new(),
+            ip_match: None,
+            scope_status: observed_scope_status(),
+            reason: None,
+            error: None,
+            details: Value::Object(Default::default()),
+        }
+    }
+
+    pub fn with_ip(mut self, source_ip: Option<String>) -> Self {
+        self.source_ip = source_ip;
+        self
+    }
+
+    pub fn with_dns(
+        mut self,
+        status: &str,
+        addresses: Vec<String>,
+        ip_match: &str,
+        scope_status: &str,
+    ) -> Self {
+        self.dns_status = Some(status.to_string());
+        self.addresses = addresses;
+        self.ip_match = Some(ip_match.to_string());
+        self.scope_status = scope_status.to_string();
+        self
+    }
+
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
+    }
+
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = details;
+        self
+    }
+}
+
+/// A point-in-time enrichment snapshot for one host. The Assets card reads
+/// saved snapshots and never performs network requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEnrichment {
+    pub host: String,
+    #[serde(default)]
+    pub candidate_id: Option<String>,
+    #[serde(default)]
+    pub asset_id: Option<String>,
+    pub data: Value,
+}
+
+/// A versioned classification result (technology groups, categories,
+/// confidence/interest and evidence) for an asset or candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewClassification {
+    pub subject_type: String,
+    pub subject_id: String,
+    pub host: Option<String>,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsVerification {
+    NotChecked,
+    Verified,
+    NoAddresses,
+    DnsError,
+    NotPermitted,
+}
+
+impl DnsVerification {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotChecked => "not_checked",
+            Self::Verified => "verified",
+            Self::NoAddresses => "no_addresses",
+            Self::DnsError => "dns_error",
+            Self::NotPermitted => "not_permitted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "not_checked" => Ok(Self::NotChecked),
+            "verified" => Ok(Self::Verified),
+            "no_addresses" => Ok(Self::NoAddresses),
+            "dns_error" => Ok(Self::DnsError),
+            "not_permitted" => Ok(Self::NotPermitted),
+            other => Err(format!("unsupported DNS verification status: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IpMatch {
+    Matched,
+    NotMatched,
+    Unknown,
+}
+
+impl IpMatch {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::NotMatched => "not_matched",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "matched" => Ok(Self::Matched),
+            "not_matched" => Ok(Self::NotMatched),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(format!("unsupported IP match status: {other}")),
+        }
+    }
 }

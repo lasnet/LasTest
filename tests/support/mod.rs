@@ -217,6 +217,7 @@ pub fn task_context(env: &TestEnv, scope: Scope, job_id: &str) -> TaskContext {
         scope: lastest::scope::EffectiveScope::new(scope.clone(), scope),
         cancel: Arc::new(AtomicBool::new(false)),
         previous_job: None,
+        input_jobs: Vec::new(),
     }
 }
 

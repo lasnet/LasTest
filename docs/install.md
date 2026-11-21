@@ -80,7 +80,9 @@ install -d -m 0750 -o 10001 -g 10001 /srv/lastest-data
 
 ## Конфигурация
 
-Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_MAX_CONCURRENT_JOBS`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_NMAP_PATH`, `LASTEST_SUBFINDER_PATH`, `LASTEST_DNSMAP_PATH`, `LASTEST_LOG_LEVEL`.
+Шаблон: `config/lastest.toml.example`. Файл передаётся через `LASTEST_CONFIG`. Основные env-overrides: `LASTEST_DATA_DIR`, `LASTEST_BIND`, `LASTEST_MAX_CONCURRENT_JOBS`, `LASTEST_DNS_SERVER`, `LASTEST_SECURE_COOKIES`, `LASTEST_INTERNAL_RANGES`, `LASTEST_CERTSPOTTER_TOKEN`, `LASTEST_CENSYS_API_ID`, `LASTEST_CENSYS_API_SECRET`, `LASTEST_CENSYS_PAT`, `LASTEST_CENSYS_ORGANIZATION_ID`, `LASTEST_CENSYS_PLATFORM_URL`, `LASTEST_PROVIDER_CACHE_TTL_SECONDS`, `LASTEST_PROVIDER_NEGATIVE_CACHE_TTL_SECONDS`, `LASTEST_NMAP_PATH`, `LASTEST_SUBFINDER_PATH`, `LASTEST_DNSMAP_PATH`, `LASTEST_LOG_LEVEL`.
+
+Censys Platform v3 включается непустым `censys_pat` / `LASTEST_CENSYS_PAT`; опциональный `censys_organization_id` передаётся заголовком организации. Без PAT полная legacy-пара `censys_api_id` + `censys_api_secret` использует v2 endpoint, неполная пара считается ошибкой конфигурации. Basic-креденшелы никогда не отправляются на v3, PAT — на legacy endpoint. API и worker получают одинаковую конфигурацию из одного TOML/env и должны быть перезапущены после изменения; hot reload не поддерживается. Кэш и лимитер провайдеров общие для установки (SQLite в data dir), TTL, отрицательный TTL, размер, cooldown и число повторов настраиваются в `provider_*`/`discovery_*` полях. Секреты не выводятся в Debug-логах и не возвращаются API.
 
 Docker-образ включает классический dnsmap 0.36 из закреплённого исходника. Его служебные DNS-пробы отключены патчем: Scope и wildcard проверяет LasTest. Вне Docker задайте `dnsmap_path` / `LASTEST_DNSMAP_PATH` на аналогично собранный бинарник (патч `src/tasks/dnsmap-probes.patch`). Без бинарника задача отображается как недоступная. dnsmap использует системный DNS resolver; для контейнера настройте DNS средствами Docker. Повторная A/AAAA-проверка LasTest использует `LASTEST_DNS_SERVER`, если он задан. `dnsmap_timeout_seconds` задаёт общий таймаут процессов одного домена, по умолчанию 600 секунд. Лимиты артефактов и сетевых таймаутов сохраняются.
 
@@ -98,3 +100,8 @@ LASTEST_IMAGE=lastest:local docker compose up -d --no-build --pull never
 Для сборки с нуля добавьте `--pull --no-cache` к `docker build`. Если нужна чистая база, команда `docker compose down -v` удаляет том LasTest с аккаунтами, проектами и результатами. После запуска на пустом томе снова получите код из раздела «Запуск и первый вход».
 
 Для сквозной проверки запуска используйте `./scripts/e2e.sh` с `LASTEST_IMAGE` по digest. Скрипт создаёт собственные контейнеры, сеть и том и выполняет тестовую задачу.
+
+Стандартный host endpoint Censys Platform v3:
+`https://api.platform.censys.io/v3/global/asset/host/{ip}`.
+Путь и Bearer PAT сверены с [официальным API Censys](https://docs.censys.com/reference/v3-globaldata-asset-host).
+Последнее слово `globaldata` в имени страницы документации не является частью URL API.

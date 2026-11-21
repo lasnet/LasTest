@@ -12,6 +12,19 @@
     assetsOffset: 0,
     assetsLoading: false,
     assetsRequest: 0,
+    assetFilters: { technology: "", provider: "", category: "" },
+    candidates: null,
+    candidatesQuery: "",
+    candidateFilters: { source: "", dns_status: "", ip_match: "", scope_status: "", confidence: "", interest: "" },
+    candidatesOffset: 0,
+    candidatesLoading: false,
+    candidatesRequest: 0,
+    candidateDetail: null,
+    assetDetail: null,
+    providers: {},
+    discoveryHttpEnrichment: false,
+    candidateDetailRequest: 0,
+    assetDetailRequest: 0,
     deleteAsset: null,
     assetDeleting: false,
     scope: null,
@@ -295,7 +308,9 @@
     try {
       const value = await api("/api/task-types");
       state.taskTypes = value.task_types || [];
+      state.providers = value.providers || {};
       renderScanModules();
+      renderProviderCatalog();
     } catch (error) { notice(error.message, "error"); }
   }
 
@@ -306,8 +321,23 @@
     state.assetsOffset = 0;
     state.assetsRequest++;
     state.assetsLoading = false;
+    state.candidates = null;
+    state.candidatesQuery = "";
+    state.candidatesOffset = 0;
+    state.candidatesRequest++;
+    state.candidatesLoading = false;
+    state.candidateDetail = null;
+    state.assetDetail = null;
+    state.candidateDetailRequest++;
+    state.assetDetailRequest++;
+    for (const id of ["candidate-detail-dialog", "asset-detail-dialog"]) $("#" + id).close();
+    state.assetFilters = { technology: "", provider: "", category: "" };
+    state.candidateFilters = { source: "", dns_status: "", ip_match: "", scope_status: "", confidence: "", interest: "" };
+    for (const input of $$("#assets-filter-technology, #assets-filter-provider, #assets-filter-category, #candidates-source, #candidates-dns, #candidates-ip-match, #candidates-scope, #candidates-confidence, #candidates-interest")) input.value = "";
     clearTimeout(assetsSearchTimer);
+    clearTimeout(candidatesSearchTimer);
     $("#assets-search").value = "";
+    $("#candidates-search").value = "";
     selectedModules.clear();
     scanParams.clear();
     rememberProject();
@@ -363,6 +393,8 @@
     renderDashboard();
     renderFindings();
     renderAssets();
+    renderCandidates();
+    renderProviderCatalog();
     if (state.view === "users") renderUsers();
   }
 
@@ -370,6 +402,7 @@
     if (!state.projectId) return;
     try {
       if (["dashboard", "assets", "findings"].includes(state.view)) await loadDashboard();
+      if (state.view === "assets") await loadCandidates();
       if (state.view === "scans") await Promise.all([loadJobs(), loadScope()]);
       if (state.view === "scope") await loadScope();
       if (state.view === "users") await loadAdmin();
@@ -700,6 +733,9 @@
     const projectId = state.projectId;
     const request = ++state.assetsRequest;
     const params = new URLSearchParams({ q: state.assetsQuery, offset: state.assetsOffset });
+    if (state.assetFilters.technology) params.set("technology", state.assetFilters.technology);
+    if (state.assetFilters.provider) params.set("provider", state.assetFilters.provider);
+    if (state.assetFilters.category) params.set("category", state.assetFilters.category);
     state.assetsLoading = true;
     $("#assets-error").textContent = "";
     renderAssets();
@@ -727,14 +763,21 @@
     $("#assets-search").disabled = !state.projectId;
     if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
     else if (state.assetsLoading) node.appendChild(el("p", "Loading assets…", "empty"));
-    else node.appendChild(table(["Hosts", "IP addresses", "Last seen", "Actions"], data?.items || [], (row, column) => {
+    else node.appendChild(table(["Hosts", "IP addresses", "Groups", "Confidence / interest", "Last seen", "Actions"], data?.items || [], (row, column) => {
       if (column === "Hosts") return row.host;
       if (column === "IP addresses") {
         const addresses = el("div");
         for (const ip of row.ips) addresses.appendChild(el("div", ip));
         return addresses;
       }
+      if (column === "Groups") return (row.groups || []).join(", ") || "unknown";
+      if (column === "Confidence / interest") return row.confidence
+        ? `${row.confidence} / ${row.interest || "unknown"}` : "unknown";
       if (column === "Last seen") return row.last_seen;
+      const wrap = el("div", null, "button-row");
+      const details = el("button", "Details", "link");
+      details.type = "button";
+      details.addEventListener("click", () => openAssetDetail(row.id));
       const button = el("button", "×", "icon-button asset-delete");
       button.type = "button";
       const label = row.host || row.ips.join(", ");
@@ -749,7 +792,8 @@
           : `Delete ${label} and its observations and findings from this project? Job history and evidence files remain. Future scans may discover this IP again.`;
         $("#delete-asset-dialog").showModal();
       });
-      return button;
+      append(wrap, details, button);
+      return wrap;
     }));
     const total = data?.total || 0;
     const disabled = !state.projectId || !data || state.assetsLoading;
@@ -769,6 +813,9 @@
     const name = state.project?.name || "project";
     try {
       const params = new URLSearchParams({ q: state.assetsQuery });
+      if (state.assetFilters.technology) params.set("technology", state.assetFilters.technology);
+      if (state.assetFilters.provider) params.set("provider", state.assetFilters.provider);
+      if (state.assetFilters.category) params.set("category", state.assetFilters.category);
       const blob = await apiBytes(`/api/projects/${encodeURIComponent(projectId)}/assets/export/${format}?${params}`);
       const url = URL.createObjectURL(blob);
       const link = el("a");
@@ -780,6 +827,251 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       notice(`Exported ${format.toUpperCase()} assets.`, "info");
     } catch (error) { notice(error.message, "error"); }
+  }
+
+  async function downloadCandidates(format) {
+    if (!requireProject()) return;
+    const projectId = state.projectId;
+    const name = state.project?.name || "project";
+    try {
+      const params = new URLSearchParams({ q: state.candidatesQuery });
+      for (const [key, value] of Object.entries(state.candidateFilters)) if (value) params.set(key, value);
+      const blob = await apiBytes(`/api/projects/${encodeURIComponent(projectId)}/discovery/export/${format}?${params}`);
+      const url = URL.createObjectURL(blob);
+      const link = el("a");
+      link.href = url;
+      link.download = `${name}-candidates.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notice(`Exported ${format.toUpperCase()} candidates.`, "info");
+    } catch (error) { notice(error.message, "error"); }
+  }
+
+  function addCandidateToScope() {
+    const host = $("#candidate-add-scope").dataset.host || "";
+    if (!requireProject() || !host || state.scopeSaving || state.me?.role === "viewer") return;
+    if ($("#candidate-detail-dialog").dataset.projectId !== state.projectId) {
+      notice("The selected project changed. Reopen the candidate from the current project.", "error");
+      return;
+    }
+    if (!state.scope) { notice("Load the project Scope before adding a name.", "error"); return; }
+    if (state.rules.some((rule) => rule.kind === "exact_domain" && rule.value === host && !rule.exclusion)) {
+      notice(`${host} is already in the Scope editor.`, "info");
+      return;
+    }
+    // This only edits the unsaved Scope draft; saving and approval stay explicit.
+    state.rules.push({ kind: "exact_domain", value: host, exclusion: false, verified: true });
+    $("#candidate-detail-dialog").close();
+    location.hash = "#scope";
+    updateScopeControls();
+    renderScope();
+    notice(`${host} was added to the Scope editor. Review and save the revision to approve it.`, "info");
+  }
+
+  async function loadCandidates() {
+    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const request = ++state.candidatesRequest;
+    const params = new URLSearchParams({ q: state.candidatesQuery, offset: state.candidatesOffset, limit: 10 });
+    for (const [key, value] of Object.entries(state.candidateFilters)) if (value) params.set(key, value);
+    state.candidatesLoading = true;
+    $("#candidates-error").textContent = "";
+    renderCandidates();
+    try {
+      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/discovery/candidates?${params}`);
+      if (request !== state.candidatesRequest || projectId !== state.projectId) return;
+      state.candidates = value;
+      state.candidatesOffset = value.offset;
+    } catch (error) {
+      if (request !== state.candidatesRequest || projectId !== state.projectId) return;
+      state.candidates = null;
+      $("#candidates-error").textContent = error.message;
+    } finally {
+      if (request === state.candidatesRequest && projectId === state.projectId) {
+        state.candidatesLoading = false;
+        renderCandidates();
+        renderProviderCatalog();
+      }
+    }
+  }
+
+  function renderProviderCatalog() {
+    const node = $("#provider-catalog");
+    if (!node) return;
+    const providers = state.providers || {};
+    const parts = [];
+    for (const [name, provider] of Object.entries(providers)) {
+      if (!provider) continue;
+      const stateLabel = provider.configured ? "configured" : "not configured";
+      const mode = provider.mode ? ` (${provider.mode})` : "";
+      parts.push(`${name.replaceAll("_", " ")}: ${stateLabel}${mode}`);
+    }
+    node.textContent = parts.length ? `Provider integration: ${parts.join(" · ")}` : "";
+  }
+
+  function renderCandidates() {
+    const node = $("#candidates-inventory");
+    clear(node);
+    const data = state.candidates;
+    if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
+    else if (state.candidatesLoading) node.appendChild(el("p", "Loading candidates…", "empty"));
+    else if (!data?.items?.length) {
+      node.appendChild(el("p", "No candidates match these filters yet. Run Asset Discovery from Scans with approved IP addresses in Scope.", "empty"));
+    } else {
+      node.appendChild(table(["Host", "Sources", "DNS", "IP match", "Scope", "Confidence / interest", "Last seen", "Details"], data.items, (row, column) => {
+        if (column === "Host") return row.hostname;
+        if (column === "Sources") return (row.sources || []).join(", ");
+        if (column === "DNS") return row.dns_status;
+        if (column === "IP match") return row.ip_match;
+        if (column === "Scope") return row.current_scope_status === row.scope_status_at_check
+          ? row.current_scope_status
+          : `${row.current_scope_status} (checked as ${row.scope_status_at_check})`;
+        if (column === "Confidence / interest") return `${row.confidence || "unknown"} / ${row.interest || "unknown"}`;
+        if (column === "Last seen") return row.last_seen;
+        const button = el("button", "Details", "link");
+        button.type = "button";
+        button.addEventListener("click", () => openCandidateDetail(row.id));
+        return button;
+      }));
+    }
+    const total = data?.total || 0;
+    const disabled = !state.projectId || !data || state.candidatesLoading;
+    $("#candidates-previous").disabled = disabled || state.candidatesOffset === 0;
+    $("#candidates-next").disabled = disabled || state.candidatesOffset + 10 >= total;
+    $("#candidates-page-status").textContent = state.candidatesLoading ? "Loading…" : total
+      ? `${state.candidatesOffset + 1}–${Math.min(state.candidatesOffset + 10, total)} of ${total}` : "0 candidates";
+    for (const format of ["json", "csv"]) $("#candidates-export-" + format).disabled = !state.projectId || total === 0;
+  }
+
+  async function openCandidateDetail(candidateId) {
+    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const request = ++state.candidateDetailRequest;
+    $("#candidate-add-scope").disabled = true;
+    $("#candidate-add-scope").dataset.host = "";
+    $("#candidate-detail-error").textContent = "";
+    $("#candidate-detail-content").replaceChildren(el("p", "Loading candidate details…", "empty"));
+    $("#candidate-detail-dialog").dataset.projectId = projectId;
+    $("#candidate-detail-dialog").showModal();
+    try {
+      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/discovery/candidates/${encodeURIComponent(candidateId)}`);
+      if (projectId !== state.projectId || request !== state.candidateDetailRequest || !$("#candidate-detail-dialog").open) return;
+      state.candidateDetail = value.candidate;
+      renderCandidateDetail(value.candidate);
+    } catch (error) {
+      if (projectId === state.projectId && request === state.candidateDetailRequest) $("#candidate-detail-error").textContent = error.message;
+    }
+  }
+
+  function renderCandidateDetail(candidate) {
+    const content = $("#candidate-detail-content");
+    clear(content);
+    $("#candidate-detail-title").textContent = candidate.hostname || "Candidate";
+    const summary = el("div", null, "details-grid");
+    const fields = {
+      "DNS status": candidate.dns_status,
+      "Source IP match": candidate.ip_match,
+      "Scope at check": candidate.scope_status_at_check,
+      "Current Scope": candidate.current_scope_status,
+      "Addresses": (candidate.addresses || []).join(", ") || "none",
+      "Sources": (candidate.sources || []).join(", "),
+      "First seen": candidate.first_seen,
+      "Last checked": candidate.last_checked_at || "not checked",
+    };
+    for (const [label, value] of Object.entries(fields)) {
+      summary.appendChild(el("span", label, "muted"));
+      summary.appendChild(el("strong", value || "unknown"));
+    }
+    content.appendChild(summary);
+    const classification = candidate.classification;
+    if (classification) {
+      content.appendChild(el("h3", "Classification"));
+      content.appendChild(el("p", `Confidence ${classification.confidence} · interest ${classification.interest} · groups ${(classification.groups || []).join(", ")} · categories ${(classification.categories || []).join(", ")}`));
+      const reasons = (classification.reasons || []).map((reason) => `${reason.claim}: ${reason.basis}`);
+      if (reasons.length) content.appendChild(el("ul", null, "details-list")).append(...reasons.map((reason) => el("li", reason)));
+    }
+    if (candidate.enrichment) {
+      content.appendChild(el("h3", "Latest enrichment"));
+      content.appendChild(el("p", `Saved ${candidate.enrichment.created_at} · format ${candidate.enrichment.format_version}`));
+    }
+    content.appendChild(el("h3", "Evidence history"));
+    const evidence = candidate.evidence || [];
+    if (!evidence.length) content.appendChild(el("p", "No evidence stored.", "empty"));
+    for (const item of evidence) {
+      const box = el("article", null, "evidence-row");
+      box.appendChild(el("strong", `${item.source} · ${item.data_type} · ${item.observed_at}`));
+      box.appendChild(el("p", `${item.dns_status || "no DNS status"} · IP match ${item.ip_match || "unknown"} · source IP ${item.source_ip || "n/a"}${item.reason ? ` · ${item.reason}` : ""}${item.error ? ` · ${item.error}` : ""}`, "muted"));
+      if (item.details && Object.keys(item.details).length) {
+        const pre = el("pre", JSON.stringify(item.details, null, 2), "details-json");
+        const raw = el("details");
+        append(raw, el("summary", "Raw evidence"), pre);
+        box.appendChild(raw);
+      }
+      content.appendChild(box);
+    }
+    const add = $("#candidate-add-scope");
+    add.disabled = state.me?.role === "viewer" || candidate.current_scope_status === "allowed";
+    add.title = add.disabled ? "Already in Scope or Analyst permission required" : "Add this name to the Scope editor without saving";
+    add.dataset.host = candidate.hostname || "";
+  }
+
+  async function openAssetDetail(assetId) {
+    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const request = ++state.assetDetailRequest;
+    $("#asset-detail-error").textContent = "";
+    $("#asset-detail-content").replaceChildren(el("p", "Loading asset details…", "empty"));
+    $("#asset-detail-dialog").showModal();
+    try {
+      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`);
+      if (projectId !== state.projectId) return;
+      renderAssetDetail(value.asset);
+    } catch (error) {
+      if (projectId === state.projectId && request === state.assetDetailRequest) $("#asset-detail-error").textContent = error.message;
+    }
+  }
+
+  function renderAssetDetail(asset) {
+    const content = $("#asset-detail-content");
+    clear(content);
+    $("#asset-detail-title").textContent = asset.value || "Asset details";
+    content.appendChild(el("p", `${asset.kind} · first seen ${asset.first_seen} · last seen ${asset.last_seen}`, "muted"));
+    const classification = asset.classification;
+    if (classification) {
+      content.appendChild(el("h3", "Classification"));
+      content.appendChild(el("p", `Confidence ${classification.confidence} · interest ${classification.interest}`));
+      content.appendChild(el("p", `Groups: ${(classification.groups || []).join(", ") || "unknown"}`));
+      content.appendChild(el("p", `Categories: ${(classification.categories || []).join(", ") || "none"}`));
+      const reasons = classification.reasons || [];
+      if (reasons.length) content.appendChild(el("ul", null, "details-list")).append(...reasons.map((reason) => el("li", `${reason.claim}: ${reason.basis}`)));
+      const hints = classification.surface_hints || [];
+      if (hints.length) content.appendChild(el("p", `Surface hints: ${hints.map((hint) => hint.name).join(", ")}`));
+    }
+    content.appendChild(el("h3", "Detected technologies"));
+    const technologies = asset.technologies || [];
+    if (!technologies.length) content.appendChild(el("p", "No stored technology evidence.", "muted"));
+    for (const tech of technologies) {
+      content.appendChild(el("p", `${tech.name}${tech.versions?.length ? " · " + tech.versions.join(", ") : tech.version ? " · " + tech.version : ""}`));
+      const evidence = tech.evidence || [];
+      if (Array.isArray(evidence) && evidence.length) content.appendChild(el("ul", null, "details-list")).append(...evidence.map((item) => el("li", `${item.source}: ${item.evidence}`)));
+    }
+    content.appendChild(el("h3", "DNS"));
+    content.appendChild(table(["Source", "Type", "Value", "Observed"], asset.dns || [], (row, column) => column === "Source" ? row.source : column === "Type" ? row.data?.record_type || row.kind : column === "Value" ? row.data?.value || row.data?.name || "" : row.observed_at));
+    content.appendChild(el("h3", "HTTP services"));
+    content.appendChild(table(["URL", "Status", "Title", "Server"], asset.http || [], (row, column) => {
+      const data = row.data || {};
+      return column === "URL" ? data.url : column === "Status" ? data.status_code : column === "Title" ? data.title : data.server;
+    }));
+    content.appendChild(el("h3", "Ports"));
+    content.appendChild(el("p", `Confirmed: ${(asset.ports?.confirmed || []).length} · passive reported: ${(asset.ports?.passive_reported || []).join(", ") || "none"}`));
+    content.appendChild(el("h3", "Network"));
+    content.appendChild(el("p", `Organization: ${asset.network?.organization || "unknown"} · ASN: ${asset.network?.asn || "unknown"} · country: ${asset.network?.country || "unknown"}`));
+    if (asset.candidate) {
+      content.appendChild(el("h3", "Provenance"));
+      content.appendChild(el("p", `Candidate ${asset.candidate.hostname} · DNS ${asset.candidate.dns_status} · IP match ${asset.candidate.ip_match} · sources ${(asset.candidate.sources || []).join(", ")}`));
+    }
   }
 
   function renderFindings() {
@@ -1138,6 +1430,7 @@
   const scanParams = new Map();
   const submissionKeys = new Map();
   let scanning = false;
+  const discoverySubmissionKeys = new Map();
   let settingsModule = null;
 
   function moduleTasks(module) {
@@ -1182,7 +1475,7 @@
         checkbox.disabled = !available || scanning || state.me?.role === "viewer";
         checkbox.setAttribute("aria-label", `Select ${module.title}`);
         const title = el("span", module.title.replace(" ", "\n"), "scan-module-title");
-        const mode = el("span", available ? module.mode : "Not available yet", "scan-module-mode");
+        const mode = el("span", available ? (module.id === "assets" ? (state.discoveryHttpEnrichment ? "DNS + Active HTTP" : "Passive sources + DNS") : module.mode) : "Not available yet", "scan-module-mode");
         append(label, checkbox, title, mode);
         checkbox.addEventListener("change", () => {
           if (checkbox.checked) selectedModules.add(module.id);
@@ -1191,6 +1484,25 @@
           updateScanLaunch();
         });
         append(card, tools, label);
+        if (module.id === "assets") {
+          const discovery = el("div", null, "scan-module-discovery");
+          const httpLabel = el("label", null, "checkbox");
+          const httpToggle = el("input");
+          httpToggle.type = "checkbox";
+          httpToggle.checked = state.discoveryHttpEnrichment;
+          httpToggle.disabled = scanning || state.me?.role === "viewer";
+          httpToggle.addEventListener("change", () => { state.discoveryHttpEnrichment = httpToggle.checked; renderScanModules(); });
+          append(httpLabel, httpToggle, el("span", "Active HTTP enrichment"));
+          const startButton = el("button", "Start Asset Discovery", "primary");
+          startButton.type = "button";
+          startButton.disabled = scanning || !state.projectId || state.scope?.status !== "approved" || state.me?.role === "viewer";
+          startButton.addEventListener("click", startAssetDiscovery);
+          const note = el("p", state.discoveryHttpEnrichment
+            ? "Runs passive sources, permitted DNS verification and explicitly enabled HTTP requests in sequence."
+            : "Runs passive sources and permitted DNS verification; no HTTP requests are made.", "muted field-hint");
+          append(discovery, httpLabel, startButton, note);
+          card.appendChild(discovery);
+        }
         container.appendChild(card);
       }
     }
@@ -1206,6 +1518,55 @@
       : !state.scope ? "Loading project scope…"
       : !ready ? "Approve the project scope before starting."
       : titles.length ? `Selected: ${titles.join(", ")}` : "Select one or more techniques.";
+    for (const button of $$(".scan-module-discovery button")) {
+      button.disabled = scanning || !state.projectId || !ready || state.me?.role === "viewer";
+    }
+  }
+
+  async function startAssetDiscovery() {
+    if (scanning || !requireProject() || state.me?.role === "viewer") return;
+    if (state.scope?.status !== "approved") { notice("Approve the project Scope before starting Asset Discovery.", "error"); return; }
+    const projectId = state.projectId;
+    const ips = scopeScanIps();
+    if (!ips.length) {
+      openScanDialog(scanModules.find((module) => module.id === "assets"), "settings");
+      $("#scan-settings-error").textContent = "Add allowed IP address records in Scope before starting Asset Discovery. CIDR ranges are applied by the backend only when they are explicitly approved; the UI does not expand them.";
+      return;
+    }
+    const reverse = state.taskTypes.find((task) => task.name === "reverse.ip");
+    const configured = scanParams.get("reverse.ip")?.sources;
+    const sources = (Array.isArray(configured) ? configured : ["ptr", "shodan_internetdb"]).filter((source) =>
+      !reverse?.params_schema?.properties?.sources?.items?.enum
+      || reverse.params_schema.properties.sources.items.enum.includes(source));
+    if (!sources.length) {
+      openScanDialog(scanModules.find((module) => module.id === "assets"), "settings");
+      $("#scan-settings-error").textContent = "Select at least one source: PTR, Shodan InternetDB or Censys.";
+      return;
+    }
+    const payload = { preset: "asset_discovery", ips, sources, http_enrichment: state.discoveryHttpEnrichment };
+    const fingerprint = JSON.stringify({ projectId, ...payload });
+    if (!discoverySubmissionKeys.has(fingerprint)) discoverySubmissionKeys.set(fingerprint, crypto.randomUUID());
+    scanning = true;
+    renderScanModules();
+    $("#scan-error").textContent = "";
+    try {
+      await api(`/api/projects/${encodeURIComponent(projectId)}/chains`, {
+        method: "POST",
+        body: { ...payload, idempotency_key: discoverySubmissionKeys.get(fingerprint) },
+      });
+      discoverySubmissionKeys.delete(fingerprint);
+      notice(state.discoveryHttpEnrichment
+        ? "Asset Discovery chain submitted with explicit active HTTP enrichment."
+        : "Asset Discovery chain submitted without HTTP requests.", "success");
+    } catch (error) {
+      if (state.projectId === projectId) $("#scan-error").textContent = `${error.message} Retry to continue without duplicating the submitted run.`;
+    } finally {
+      scanning = false;
+      renderScanModules();
+      if (state.projectId === projectId) {
+        try { await loadJobs(); } catch (error) { notice(error.message, "error"); }
+      }
+    }
   }
 
   const scanFieldLabels = {
@@ -1236,6 +1597,7 @@
   function hiddenScanField(task, key) {
     return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && ["sources", "resolve"].includes(key))
       || (task.name === "subdomains.discover" && key === "providers")
+      || (task.name === "reverse.ip" && key === "providers")
       || (task.name === "dns.wordlist" && key === "words");
   }
 
@@ -1244,6 +1606,7 @@
     const domains = scopeScanDomains();
     for (const key of Object.keys(task.params_schema.properties || {})) {
       if (key === "ips") params.ips = scopeScanIps();
+      else if (key === "sources" && task.name === "reverse.ip") params.sources = ["ptr", "shodan_internetdb"];
       else if (key === "domain") params.domain = domains[0] || "";
       else if (["domains", "targets"].includes(key)) params[key] = domains;
       else if (["seeds", "base_urls"].includes(key)) params[key] = domains.map((domain) => `https://${domain}/`);
@@ -1298,7 +1661,22 @@
           const label = el("label", scanFieldLabels[key] || key);
           label.htmlFor = id;
           let input;
-          if (property.enum) {
+          if (task.name === "reverse.ip" && key === "sources") {
+            const choices = el("fieldset", null, "source-choices");
+            choices.appendChild(el("legend", "Sources"));
+            for (const value of property.items.enum) {
+              const option = el("input");
+              option.type = "checkbox"; option.dataset.scanParam = key; option.dataset.task = task.name; option.dataset.scanValue = value;
+              option.checked = params.sources?.includes(value) || false;
+              option.disabled = scanning || state.me?.role === "viewer" || !state.providers[value]?.available;
+              const text = value === "ptr" ? "PTR" : value === "censys" ? "Censys" : "Shodan InternetDB";
+              const label = el("label", null, "checkbox");
+              append(label, option, el("span", option.disabled && !state.providers[value]?.available ? `${text} (not configured)` : text));
+              choices.appendChild(label);
+            }
+            fields.appendChild(choices);
+            continue;
+          } else if (property.enum) {
             input = el("select");
             for (const option of property.enum) input.appendChild(new Option(option, option));
             input.value = params[key] ?? property.default ?? property.enum[0];
@@ -1356,6 +1734,11 @@
     for (const input of $$("#scan-dialog-content [data-scan-param]").filter((node) => node.dataset.task === task.name)) {
       const key = input.dataset.scanParam;
       const schema = task.params_schema.properties[key];
+      if (input.dataset.scanValue) {
+        params[key] = $$("#scan-dialog-content [data-scan-value]").filter((node) => node.dataset.task === task.name && node.dataset.scanParam === key && node.checked).map((node) => node.dataset.scanValue);
+        if (!params[key].length) throw new Error("Select at least one Discovery source.");
+        continue;
+      }
       if (schema.type === "boolean") { params[key] = input.checked; continue; }
       if (!input.value.trim()) {
         if (task.params_schema.required?.includes(key)) throw new Error(`${scanFieldLabels[key] || key} is required.`);
@@ -1412,7 +1795,12 @@
           return;
         }
         const runs = task.name === "dns.wordlist" ? scopeScanDomains().map((domain) => ({ ...params, domain })) : [params];
-        for (const run of runs) tasks.set(JSON.stringify({ task_type: task.name, params: run }), { task_type: task.name, params: run });
+        for (const run of runs) {
+          if (module.id === "assets") {
+            const chain = { preset: "asset_discovery", ips: run.ips, sources: run.sources, http_enrichment: state.discoveryHttpEnrichment };
+            tasks.set(JSON.stringify(chain), { task_type: "asset_discovery", params: chain });
+          } else tasks.set(JSON.stringify({ task_type: task.name, params: run }), { task_type: task.name, params: run });
+        }
       }
     }
     if (!tasks.size) return;
@@ -1427,8 +1815,10 @@
           const bytes = crypto.getRandomValues(new Uint8Array(16));
           submissionKeys.set(fingerprint, Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));
         }
-        await api(`/api/projects/${encodeURIComponent(projectId)}/jobs`, {
-          method: "POST", body: { task_type, params, idempotency_key: submissionKeys.get(fingerprint) },
+        const chain = task_type === "asset_discovery";
+        await api(`/api/projects/${encodeURIComponent(projectId)}/${chain ? "chains" : "jobs"}`, {
+          method: "POST", body: chain ? { ...params, idempotency_key: submissionKeys.get(fingerprint) }
+            : { task_type, params, idempotency_key: submissionKeys.get(fingerprint) },
         });
         submitted.push(task_type);
       }
@@ -1473,6 +1863,7 @@
   $("#export-csv-button").addEventListener("click", () => downloadReport("csv"));
 
   let assetsSearchTimer;
+  let candidatesSearchTimer;
   $("#assets-search").addEventListener("input", (event) => {
     state.assetsQuery = event.target.value;
     state.assetsOffset = 0;
@@ -1482,6 +1873,36 @@
     clearTimeout(assetsSearchTimer);
     assetsSearchTimer = setTimeout(loadAssets, 200);
   });
+  for (const [id, key] of [["assets-filter-technology", "technology"], ["assets-filter-provider", "provider"], ["assets-filter-category", "category"]]) {
+    $(`#${id}`).addEventListener("input", (event) => {
+      state.assetFilters[key] = event.target.value.trim();
+      state.assetsOffset = 0;
+      clearTimeout(assetsSearchTimer);
+      assetsSearchTimer = setTimeout(loadAssets, 200);
+    });
+  }
+  $("#candidates-search").addEventListener("input", (event) => {
+    state.candidatesQuery = event.target.value;
+    state.candidatesOffset = 0;
+    state.candidatesRequest++;
+    state.candidatesLoading = true;
+    renderCandidates();
+    clearTimeout(candidatesSearchTimer);
+    candidatesSearchTimer = setTimeout(loadCandidates, 200);
+  });
+  for (const [id, key] of [["candidates-source", "source"], ["candidates-dns", "dns_status"], ["candidates-ip-match", "ip_match"], ["candidates-scope", "scope_status"], ["candidates-confidence", "confidence"], ["candidates-interest", "interest"]]) {
+    $(`#${id}`).addEventListener("change", (event) => {
+      state.candidateFilters[key] = event.target.value;
+      state.candidatesOffset = 0;
+      loadCandidates();
+    });
+  }
+  $("#candidates-previous").addEventListener("click", () => { state.candidatesOffset = Math.max(0, state.candidatesOffset - 10); loadCandidates(); });
+  $("#candidates-next").addEventListener("click", () => { state.candidatesOffset += 10; loadCandidates(); });
+  for (const format of ["json", "csv"]) $("#candidates-export-" + format).addEventListener("click", () => downloadCandidates(format));
+  $("#close-candidate-detail").addEventListener("click", () => $("#candidate-detail-dialog").close());
+  $("#close-asset-detail").addEventListener("click", () => $("#asset-detail-dialog").close());
+  $("#candidate-add-scope").addEventListener("click", addCandidateToScope);
   $("#assets-previous").addEventListener("click", () => { state.assetsOffset = Math.max(0, state.assetsOffset - 10); loadAssets(); });
   $("#assets-next").addEventListener("click", () => { state.assetsOffset += 10; loadAssets(); });
   for (const format of ["txt", "csv"]) $("#assets-export-" + format).addEventListener("click", () => downloadAssets(format));

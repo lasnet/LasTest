@@ -1,13 +1,14 @@
 use crate::domain::Job;
 use crate::scope::{canonical_ip, normalize_domain};
 use crate::tasks::{
-    dedup_strings, discovery, ensure_target_limit, parse_params, provider, TaskContext, TaskOutcome,
+    dedup_strings, discovery, ensure_target_limit, parse_params, provider, providers, TaskContext,
+    TaskOutcome,
 };
 use anyhow::Result;
 use hickory_resolver::proto::rr::RecordType;
 use rand::Rng;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::net::IpAddr;
 
@@ -26,6 +27,35 @@ struct ReverseParams {
     ips: Vec<String>,
     #[serde(default)]
     providers: Vec<String>,
+    #[serde(default)]
+    sources: Option<Vec<String>>,
+}
+
+fn push_url_segment(base: &str, segment: &str) -> String {
+    match url::Url::parse(base) {
+        Ok(mut url) => {
+            url.path_segments_mut()
+                .map(|mut segments| {
+                    segments.push(segment);
+                })
+                .ok();
+            url.to_string()
+        }
+        Err(_) => format!("{}/{}", base.trim_end_matches('/'), segment),
+    }
+}
+
+#[derive(Default)]
+struct CandidateAggregate {
+    sources: std::collections::BTreeSet<String>,
+    source_ips: std::collections::BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct IpSummary {
+    sources: Vec<String>,
+    candidates: usize,
+    status: String,
 }
 
 fn scope_hosts(ctx: &TaskContext) -> Vec<String> {
@@ -352,22 +382,49 @@ pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
 pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     let params: ReverseParams = parse_params(&job.params)?;
     let ips = dedup_strings(&params.ips);
-    if ips.len() > 128 {
-        anyhow::bail!("reverse.ip accepts at most 128 explicit addresses");
+    if ips.is_empty() || ips.len() > 128 {
+        anyhow::bail!("reverse.ip accepts 1-128 explicit addresses");
     }
-    let providers: Vec<String> = if params.providers.is_empty() {
-        vec!["shodan_internetdb".to_string()]
-    } else {
-        params.providers
+    let selected_sources: Vec<String> = match &params.sources {
+        Some(sources) => {
+            if sources.is_empty() {
+                anyhow::bail!("reverse.ip sources must not be empty");
+            }
+            dedup_strings(sources)
+        }
+        None => {
+            // Legacy `providers` semantics keep PTR and default to Shodan when
+            // the provider list is empty.
+            let mut selected = vec!["ptr".to_string()];
+            let providers = if params.providers.is_empty() {
+                vec!["shodan_internetdb".to_string()]
+            } else {
+                dedup_strings(&params.providers)
+            };
+            for provider in providers {
+                if !selected.contains(&provider) {
+                    selected.push(provider);
+                }
+            }
+            selected
+        }
     };
+    let use_ptr = selected_sources.iter().any(|source| source == "ptr");
+    let selected_providers: Vec<String> = selected_sources
+        .iter()
+        .filter(|source| source.as_str() != "ptr")
+        .cloned()
+        .collect();
     let dns = ctx.dns()?;
-    let client = provider::client(&ctx.config)?;
     let mut outcome = TaskOutcome::new();
     outcome.target(ips.len());
+    let mut candidate_map: std::collections::BTreeMap<String, CandidateAggregate> =
+        std::collections::BTreeMap::new();
     let mut provider_status = Vec::new();
-    for raw in ips {
+    let mut ip_summaries = Vec::new();
+    for raw in &ips {
         ctx.ensure_active()?;
-        let ip = match canonical_ip(&raw) {
+        let ip = match canonical_ip(raw) {
             Ok(ip) => ip,
             Err(err) => {
                 outcome.error(format!("{raw}: {err}"));
@@ -376,132 +433,346 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
             }
         };
         if let Err(err) = ctx.authorize_ip(ip) {
-            outcome.error(err.to_string());
+            provider_status.push(json!({
+                "ip": ip.to_string(), "status": "skipped", "reason": err.to_string()
+            }));
             outcome.skipped();
             continue;
         }
-        match dns.reverse(ip).await {
-            Ok(names) => {
-                for name in names {
-                    let in_scope = ctx.scope.allows_host(&name);
-                    outcome.observe(
-                        "dns",
-                        "ptr",
-                        "ip",
-                        &ip.to_string(),
-                        json!({"name": name}),
-                        if in_scope { "allowed" } else { "denied" },
-                    );
+        let mut summary = IpSummary {
+            sources: Vec::new(),
+            candidates: 0,
+            status: "ok".to_string(),
+        };
+        if use_ptr {
+            summary.sources.push("ptr".to_string());
+            match dns.reverse(ip).await {
+                Ok(names) => {
+                    let mut found = 0usize;
+                    for name in names {
+                        let in_scope = ctx.scope.allows_host(&name);
+                        outcome.observe(
+                            "dns",
+                            "ptr",
+                            "ip",
+                            &ip.to_string(),
+                            json!({"name": name}),
+                            if in_scope { "allowed" } else { "denied" },
+                        );
+                        if let Some(normalized) = providers::normalize_candidate(&name) {
+                            if candidate_map.len() >= ctx.config.max_discovery_candidates
+                                && !candidate_map.contains_key(&normalized)
+                            {
+                                outcome.error(
+                                    "discovery candidate limit reached; results are incomplete",
+                                );
+                                break;
+                            }
+                            candidate_map
+                                .entry(normalized.clone())
+                                .or_default()
+                                .sources
+                                .insert("ptr".to_string());
+                            candidate_map
+                                .get_mut(&normalized)
+                                .expect("candidate entry")
+                                .source_ips
+                                .insert(ip.to_string());
+                            outcome.candidate(
+                                crate::domain::NewCandidate::new(&normalized, "ptr", "ptr")
+                                    .with_ip(Some(ip.to_string()))
+                                    .with_details(json!({"raw_name": name})),
+                            );
+                            found += 1;
+                        } else {
+                            provider_status.push(json!({
+                                "provider": "ptr", "ip": ip.to_string(),
+                                "status": "diagnostic",
+                                "reason": "non-name PTR value was not published as a candidate",
+                                "value": name
+                            }));
+                        }
+                    }
+                    summary.candidates += found;
+                }
+                Err(err) => {
+                    summary.status = "unavailable".to_string();
+                    provider_status.push(json!({
+                        "provider": "ptr", "ip": ip.to_string(), "status": "unavailable",
+                        "reason": format!("{err}")
+                    }));
+                    outcome.error(format!("PTR {ip}: {err}"));
                 }
             }
-            Err(err) => outcome.error(format!("PTR {ip}: {err}")),
         }
-        for provider_name in &providers {
+        for provider_name in &selected_providers {
             ctx.ensure_active()?;
-            if provider_name == "censys"
-                && (ctx.config.censys_api_id.is_none() || ctx.config.censys_api_secret.is_none())
-            {
-                provider_status.push(json!({
-                    "provider": "censys",
-                    "ip": ip.to_string(),
-                    "status": "skipped",
-                    "reason": "provider is not configured"
-                }));
+            if provider_name == "censys" {
+                let integration = ctx.config.censys_integration();
+                if !integration.configured {
+                    summary.sources.push("censys".to_string());
+                    provider_status.push(json!({
+                        "provider": "censys", "ip": ip.to_string(),
+                        "status": "skipped", "mode": integration.mode.as_str(),
+                        "reason": integration.reason
+                    }));
+                    if integration.mode == crate::config::CensysMode::Incomplete {
+                        outcome.error("Censys configuration is incomplete");
+                    }
+                    continue;
+                }
+                let (url, request_headers, credential_context, api_version, namespace) =
+                    match integration.mode {
+                        crate::config::CensysMode::Platform => {
+                            let url = push_url_segment(&integration.endpoint, &ip.to_string());
+                            let pat = ctx.config.censys_pat.clone().unwrap_or_default();
+                            let mut pairs = vec![
+                                ("Authorization".to_string(), format!("Bearer {pat}")),
+                                (
+                                    "Accept".to_string(),
+                                    "application/vnd.censys.api.v3.host.v1+json".to_string(),
+                                ),
+                            ];
+                            if let Some(org) = &ctx.config.censys_organization_id {
+                                pairs.push(("X-Organization-ID".to_string(), org.clone()));
+                            }
+                            let header_pairs: Vec<(&str, &str)> = pairs
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.as_str()))
+                                .collect();
+                            let context = provider::credential_context(
+                                "censys",
+                                "platform_v3",
+                                &format!(
+                                    "{}|{}|{}",
+                                    pat,
+                                    ctx.config
+                                        .censys_organization_id
+                                        .clone()
+                                        .unwrap_or_default(),
+                                    integration.endpoint
+                                ),
+                            );
+                            (
+                                url,
+                                provider::headers(&header_pairs),
+                                context,
+                                "v3",
+                                integration.endpoint.clone(),
+                            )
+                        }
+                        _ => {
+                            let auth = format!(
+                                "{}:{}",
+                                ctx.config.censys_api_id.clone().unwrap_or_default(),
+                                ctx.config.censys_api_secret.clone().unwrap_or_default()
+                            );
+                            use base64::Engine;
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(&auth);
+                            let url = push_url_segment(&integration.endpoint, &ip.to_string());
+                            let context = provider::credential_context(
+                                "censys",
+                                "legacy_v2",
+                                &format!("{}|{}", auth, integration.endpoint),
+                            );
+                            (
+                                url,
+                                provider::headers(&[(
+                                    "Authorization",
+                                    &format!("Basic {encoded}"),
+                                )]),
+                                context,
+                                "v2",
+                                integration.endpoint.clone(),
+                            )
+                        }
+                    };
+                let fetch = provider::fetch_json_cached(
+                    ctx,
+                    "censys",
+                    api_version,
+                    &namespace,
+                    &namespace,
+                    &credential_context,
+                    &ip.to_string(),
+                    &url,
+                    request_headers,
+                    2 * 1024 * 1024,
+                )
+                .await;
+                summary.sources.push("censys".to_string());
+                handle_provider_fetch(
+                    &mut outcome,
+                    &mut provider_status,
+                    &mut summary,
+                    &mut candidate_map,
+                    "censys",
+                    ip,
+                    integration.mode.as_str(),
+                    fetch,
+                    ctx.config.provider_max_candidates,
+                    ctx.config.max_discovery_candidates,
+                );
                 continue;
             }
             if provider_name == "shodan_internetdb" {
-                let url = format!(
-                    "{}/{}",
-                    ctx.config.shodan_internetdb_url.trim_end_matches('/'),
-                    ip
-                );
-                match provider::get_json(&client, &url, provider::headers(&[]), 1024 * 1024).await {
-                    Ok((200, Some(value), _)) => {
-                        provider_status.push(json!({
-                            "provider": "shodan_internetdb", "ip": ip.to_string(), "status": "ok"
-                        }));
-                        outcome.observe(
-                            "shodan_internetdb",
-                            "provider",
-                            "ip",
-                            &ip.to_string(),
-                            value,
-                            "allowed",
-                        );
-                    }
-                    Ok((404, _, _)) => provider_status.push(json!({
-                        "provider": "shodan_internetdb", "ip": ip.to_string(), "status": "empty"
-                    })),
-                    Ok((status, _, _)) => {
-                        provider_status.push(json!({
-                            "provider": "shodan_internetdb", "ip": ip.to_string(),
-                            "status": "error", "http_status": status
-                        }));
-                        outcome.error(format!("Shodan InternetDB returned HTTP {status} for {ip}"));
-                    }
-                    Err(err) => {
-                        provider_status.push(json!({
-                            "provider": "shodan_internetdb", "ip": ip.to_string(),
-                            "status": "unavailable"
-                        }));
-                        outcome.error(format!("Shodan InternetDB {ip}: {err}"));
-                    }
-                }
-            } else if provider_name == "censys" {
-                let auth = format!(
-                    "{}:{}",
-                    ctx.config.censys_api_id.clone().unwrap_or_default(),
-                    ctx.config.censys_api_secret.clone().unwrap_or_default()
-                );
-                use base64::Engine;
-                let encoded = base64::engine::general_purpose::STANDARD.encode(auth);
-                let url = format!("{}/{}", ctx.config.censys_url.trim_end_matches('/'), ip);
-                match provider::get_json(
-                    &client,
+                let base = ctx.config.shodan_internetdb_url.clone();
+                let url = push_url_segment(&base, &ip.to_string());
+                let context =
+                    provider::credential_context("shodan_internetdb", "internetdb", "public");
+                let fetch = provider::fetch_json_cached(
+                    ctx,
+                    "shodan_internetdb",
+                    "internetdb",
+                    &base,
+                    &base,
+                    &context,
+                    &ip.to_string(),
                     &url,
-                    provider::headers(&[("Authorization", &format!("Basic {encoded}"))]),
-                    2 * 1024 * 1024,
+                    provider::headers(&[]),
+                    1024 * 1024,
                 )
-                .await
-                {
-                    Ok((200, Some(value), _)) => {
-                        provider_status.push(json!({
-                            "provider": "censys", "ip": ip.to_string(), "status": "ok"
-                        }));
-                        outcome.observe(
-                            "censys",
-                            "provider",
-                            "ip",
-                            &ip.to_string(),
-                            value,
-                            "allowed",
-                        );
-                    }
-                    Ok((404, _, _)) => provider_status.push(json!({
-                        "provider": "censys", "ip": ip.to_string(), "status": "empty"
-                    })),
-                    Ok((status, _, _)) => {
-                        provider_status.push(json!({
-                            "provider": "censys", "ip": ip.to_string(),
-                            "status": "error", "http_status": status
-                        }));
-                        outcome.error(format!("Censys returned HTTP {status} for {ip}"));
-                    }
-                    Err(err) => {
-                        provider_status.push(json!({
-                            "provider": "censys", "ip": ip.to_string(), "status": "unavailable"
-                        }));
-                        outcome.error(format!("Censys {ip}: {err}"));
-                    }
-                }
-            } else {
-                outcome.error(format!("unsupported reverse IP provider: {provider_name}"));
+                .await;
+                summary.sources.push("shodan_internetdb".to_string());
+                handle_provider_fetch(
+                    &mut outcome,
+                    &mut provider_status,
+                    &mut summary,
+                    &mut candidate_map,
+                    "shodan_internetdb",
+                    ip,
+                    "internetdb",
+                    fetch,
+                    ctx.config.provider_max_candidates,
+                    ctx.config.max_discovery_candidates,
+                );
+                continue;
             }
+            outcome.error(format!("unsupported reverse IP source: {provider_name}"));
         }
+        ip_summaries.push(json!({
+            "ip": ip.to_string(),
+            "sources": summary.sources,
+            "candidates": summary.candidates,
+            "status": summary.status,
+        }));
         outcome.processed();
     }
+
+    // Verify each distinct candidate once against the current DNS scope.
+    let mut checks = Vec::new();
+    let mut published = 0usize;
+    let mut not_permitted = 0usize;
+    let mut no_addresses = 0usize;
+    let mut dns_errors = 0usize;
+    for (hostname, aggregate) in &candidate_map {
+        ctx.ensure_active()?;
+        let permission_domain = discovery::candidate_dns_domain(ctx, hostname)?;
+        let source_ips: Vec<String> = aggregate.source_ips.iter().cloned().collect();
+        let mut candidate = crate::domain::NewCandidate::new(hostname, "reverse.ip", "dns_check")
+            .with_details(json!({"sources": aggregate.sources, "source_ips": source_ips}));
+        let (status, addresses, ip_match, scope_status, reason) = if permission_domain.is_none() {
+            not_permitted += 1;
+            (
+                "not_permitted".to_string(),
+                Vec::new(),
+                "unknown".to_string(),
+                "denied".to_string(),
+                Some("candidate is outside the current DNS scope".to_string()),
+            )
+        } else {
+            let domain = permission_domain.as_deref().expect("permitted domain");
+            match discovery::resolve_ips(&dns, ctx, domain, hostname).await {
+                Ok(ips) => {
+                    let addresses: Vec<String> = ips.iter().map(ToString::to_string).collect();
+                    let matched = addresses.iter().any(|ip| aggregate.source_ips.contains(ip));
+                    discovery::observe_host(
+                        &mut outcome,
+                        ctx,
+                        "reverse.ip",
+                        domain,
+                        hostname,
+                        &ips,
+                    )?;
+                    published += 1;
+                    (
+                        "verified".to_string(),
+                        addresses,
+                        if matched { "matched" } else { "not_matched" }.to_string(),
+                        if ctx.allows_host_now(hostname) {
+                            "allowed"
+                        } else {
+                            "denied"
+                        }
+                        .to_string(),
+                        None,
+                    )
+                }
+                Err(error) => {
+                    ctx.ensure_active()?;
+                    if crate::net::dns::is_no_records(&error) {
+                        no_addresses += 1;
+                        (
+                            "no_addresses".to_string(),
+                            Vec::new(),
+                            "unknown".to_string(),
+                            if ctx.allows_host_now(hostname) {
+                                "allowed".to_string()
+                            } else {
+                                "denied".to_string()
+                            },
+                            Some("DNS returned no addresses".to_string()),
+                        )
+                    } else {
+                        dns_errors += 1;
+                        let message = crate::net::dns::error_message(&error);
+                        outcome.error(format!("DNS {hostname}: {message}"));
+                        (
+                            "dns_error".to_string(),
+                            Vec::new(),
+                            "unknown".to_string(),
+                            "denied".to_string(),
+                            Some(message),
+                        )
+                    }
+                }
+            }
+        };
+        candidate = candidate.with_dns(&status, addresses.clone(), &ip_match, &scope_status);
+        candidate.details["source_ip_matches"] = json!(source_ips.iter().map(|ip| json!({
+            "ip": ip,
+            "match": if status != "verified" { "unknown" } else if addresses.contains(ip) { "matched" } else { "not_matched" }
+        })).collect::<Vec<_>>());
+        if let Some(reason) = &reason {
+            candidate = candidate.with_reason(reason.clone());
+        }
+        outcome.candidate(candidate);
+        checks.push(json!({
+            "hostname": hostname,
+            "sources": aggregate.sources,
+            "source_ips": source_ips,
+            "dns_status": status,
+            "addresses": addresses,
+            "ip_match": ip_match,
+            "scope_status": scope_status,
+            "reason": reason,
+        }));
+    }
+    let has_errors = outcome.counters.errors > 0 || !outcome.errors.is_empty();
     outcome.result = json!({
-        "format_version": "1",
+        "format_version": "2",
+        "sources": selected_sources,
+        "ips": ip_summaries,
+        "counts": {
+            "candidates": candidate_map.len(),
+            "verified": checks.iter().filter(|check| check["dns_status"] == "verified").count(),
+            "published": published,
+            "not_permitted": not_permitted,
+            "no_addresses": no_addresses,
+            "dns_errors": dns_errors,
+        },
+        "checks": checks,
+        "partial": has_errors,
         "providers": provider_status,
     });
     let result = outcome.result.clone();
@@ -511,4 +782,97 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
         &result,
     )?;
     Ok(outcome.finalize())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_provider_fetch(
+    outcome: &mut TaskOutcome,
+    provider_status: &mut Vec<Value>,
+    summary: &mut IpSummary,
+    candidate_map: &mut std::collections::BTreeMap<String, CandidateAggregate>,
+    provider: &str,
+    ip: std::net::IpAddr,
+    api_version: &str,
+    fetch: provider::ProviderFetch,
+    max_candidates: usize,
+    candidate_limit: usize,
+) {
+    let status_value = fetch.status.as_str();
+    if fetch.status == provider::FetchStatus::Ok {
+        if let Some(value) = fetch.value.as_ref() {
+            let parsed = providers::parse(provider, value, max_candidates);
+            for name in &parsed.names {
+                if candidate_map.len() >= candidate_limit && !candidate_map.contains_key(name) {
+                    outcome.error("discovery candidate limit reached; results are incomplete");
+                    summary.status = "partial".into();
+                    break;
+                }
+                let aggregate = candidate_map.entry(name.clone()).or_default();
+                aggregate.sources.insert(provider.to_string());
+                aggregate.source_ips.insert(ip.to_string());
+                outcome.candidate(
+                    crate::domain::NewCandidate::new(name, provider, "provider_name")
+                        .with_ip(Some(ip.to_string()))
+                        .with_details(json!({
+                            "api_version": api_version,
+                            "provider_ip": ip.to_string(),
+                            "partial": parsed.partial,
+                        })),
+                );
+            }
+            summary.candidates += parsed.names.len();
+            outcome.observe(
+                provider,
+                "provider",
+                "ip",
+                &ip.to_string(),
+                json!({
+                    "api_version": api_version,
+                    "cached": fetch.cached,
+                    "candidate_count": parsed.names.len(),
+                    "passive": parsed.passive,
+                    "partial": parsed.partial,
+                }),
+                "allowed",
+            );
+            if parsed.partial {
+                summary.status = "partial".to_string();
+                outcome.error(format!(
+                    "{provider} {ip}: provider response was incomplete or invalid"
+                ));
+            }
+            if !parsed.notes.is_empty() {
+                provider_status.push(json!({
+                    "provider": provider, "ip": ip.to_string(), "status": "partial",
+                    "reason": parsed.notes.join("; "), "cached": fetch.cached
+                }));
+            }
+        }
+    }
+    match fetch.status {
+        provider::FetchStatus::Ok => provider_status.push(json!({
+            "provider": provider, "ip": ip.to_string(), "status": "ok",
+            "http_status": fetch.http_status, "cached": fetch.cached,
+            "attempts": fetch.attempts
+        })),
+        provider::FetchStatus::Empty => provider_status.push(json!({
+            "provider": provider, "ip": ip.to_string(), "status": "empty",
+            "http_status": fetch.http_status, "cached": fetch.cached
+        })),
+        other => {
+            if summary.status == "ok" {
+                summary.status = other.as_str().to_string();
+            }
+            provider_status.push(json!({
+                "provider": provider, "ip": ip.to_string(), "status": status_value,
+                "http_status": fetch.http_status, "cached": fetch.cached,
+                "attempts": fetch.attempts,
+                "reason": fetch.error
+            }));
+            outcome.error(format!(
+                "{provider} {ip}: {}",
+                fetch.error.unwrap_or_else(|| status_value.to_string())
+            ));
+        }
+    }
 }

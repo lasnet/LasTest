@@ -150,6 +150,9 @@ impl Worker {
                         observations: Vec::new(),
                         findings: Vec::new(),
                         artifacts: Vec::new(),
+                        candidates: Vec::new(),
+                        enrichments: Vec::new(),
+                        classifications: Vec::new(),
                     };
                     let _ = self.db.complete_attempt(&job.id, &attempt_id, outcome)?;
                     return Ok(());
@@ -169,6 +172,9 @@ impl Worker {
                 observations: Vec::new(),
                 findings: Vec::new(),
                 artifacts: Vec::new(),
+                candidates: Vec::new(),
+                enrichments: Vec::new(),
+                classifications: Vec::new(),
             };
             self.db.complete_attempt(&job.id, &attempt_id, outcome)?;
             return Ok(());
@@ -183,6 +189,12 @@ impl Worker {
             cancel.clone(),
             shutdown.clone(),
         );
+        let input_jobs = if let Some(run_id) = &job.chain_run_id {
+            self.db
+                .chain_input_jobs(run_id, job.chain_order.unwrap_or(0))?
+        } else {
+            Vec::new()
+        };
         let ctx = TaskContext {
             db: self.db.clone(),
             config: self.config.clone(),
@@ -197,6 +209,7 @@ impl Worker {
             } else {
                 None
             },
+            input_jobs,
         };
         let mut result = tasks::execute(&job, &ctx).await;
         let was_cancelled = cancel.load(Ordering::SeqCst) || shutdown.load(Ordering::SeqCst);
@@ -223,6 +236,9 @@ impl Worker {
                         observations: Vec::new(),
                         findings: Vec::new(),
                         artifacts: Vec::new(),
+                        candidates: Vec::new(),
+                        enrichments: Vec::new(),
+                        classifications: Vec::new(),
                     };
                     let _ = self.db.complete_attempt(&job.id, &attempt_id, outcome)?;
                 }
@@ -245,6 +261,9 @@ impl Worker {
                     observations: Vec::new(),
                     findings: Vec::new(),
                     artifacts: Vec::new(),
+                    candidates: Vec::new(),
+                    enrichments: Vec::new(),
+                    classifications: Vec::new(),
                 };
                 let _ = self.db.complete_attempt(&job.id, &attempt_id, outcome)?;
             }
@@ -314,6 +333,9 @@ impl Worker {
             observations: outcome.observations,
             findings: outcome.findings,
             artifacts,
+            candidates: outcome.candidates,
+            enrichments: outcome.enrichments,
+            classifications: outcome.classifications,
         })
     }
 

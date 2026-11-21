@@ -17,6 +17,9 @@ pub fn build_report(db: &Db, project_id: &str) -> Result<ReportSnapshot> {
     let observations = db.all_observations(project_id, 100_000)?;
     let findings = db.all_findings(project_id)?;
     let assets = db.list_assets(project_id, 100_000)?;
+    let candidates = db.recent_candidates(project_id, 5_000)?;
+    let enrichments = db.enrichments_for_project(project_id, 5_000)?;
+    let classifications = db.classifications_for_project(project_id, 10_000)?;
     let counts = db.project_observation_counts(project_id)?;
     let mut history = Vec::new();
     for revision in &revisions {
@@ -126,6 +129,13 @@ pub fn build_report(db: &Db, project_id: &str) -> Result<ReportSnapshot> {
         "candidate_ports": candidate_ports,
         "findings": findings,
         "sources": sources,
+        "candidates": candidates,
+        "enrichment": enrichments,
+        "classification": {
+            "catalog_version": crate::tasks::tech_catalog::CATALOG_VERSION,
+            "generated_at": now_rfc3339(),
+            "subjects": classifications,
+        },
     });
     Ok(ReportSnapshot { value })
 }
@@ -253,6 +263,83 @@ pub fn render_csv(snapshot: &ReportSnapshot) -> Result<Vec<u8>> {
         .into_inner()
         .map_err(|err| anyhow::anyhow!("CSV error: {err}"))?;
     Ok(data)
+}
+
+/// Explicit extended discovery export. The standard Assets CSV/TXT and the
+/// standard report remain unchanged.
+pub fn render_discovery_json(snapshot: &ReportSnapshot) -> Result<Vec<u8>> {
+    let value = json!({
+        "format_version": "1",
+        "generated_at": now_rfc3339(),
+        "project": snapshot.value.get("project").cloned().unwrap_or(Value::Null),
+        "candidates": snapshot.value.get("candidates").cloned().unwrap_or_else(|| json!([])),
+        "enrichment": snapshot.value.get("enrichment").cloned().unwrap_or_else(|| json!([])),
+        "classification": snapshot.value.get("classification").cloned().unwrap_or(Value::Null),
+    });
+    let mut data = serde_json::to_vec_pretty(&value)?;
+    data.push(b'\n');
+    Ok(data)
+}
+
+pub fn render_discovery_csv(snapshot: &ReportSnapshot) -> Result<Vec<u8>> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record([
+        "section",
+        "host",
+        "sources",
+        "dns_status",
+        "ip_match",
+        "scope_status",
+        "confidence",
+        "interest",
+        "groups",
+        "categories",
+        "technologies",
+        "observed_at",
+    ])?;
+    if let Some(candidates) = snapshot.value.get("candidates").and_then(Value::as_array) {
+        for candidate in candidates {
+            writer.write_record([
+                csv_cell("candidate"),
+                csv_cell(candidate["hostname"].as_str().unwrap_or("")),
+                csv_cell(&candidate["sources"].to_string()),
+                csv_cell(candidate["dns_status"].as_str().unwrap_or("")),
+                csv_cell(candidate["ip_match"].as_str().unwrap_or("")),
+                csv_cell(candidate["scope_status"].as_str().unwrap_or("")),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                csv_cell(candidate["last_seen"].as_str().unwrap_or("")),
+            ])?;
+        }
+    }
+    if let Some(subjects) = snapshot
+        .value
+        .pointer("/classification/subjects")
+        .and_then(Value::as_array)
+    {
+        for subject in subjects {
+            writer.write_record([
+                csv_cell("classification"),
+                csv_cell(subject["host"].as_str().unwrap_or("")),
+                csv_cell(subject["subject_type"].as_str().unwrap_or("")),
+                String::new(),
+                String::new(),
+                String::new(),
+                csv_cell(subject["confidence"].as_str().unwrap_or("")),
+                csv_cell(subject["interest"].as_str().unwrap_or("")),
+                csv_cell(&subject["groups"].to_string()),
+                csv_cell(&subject["categories"].to_string()),
+                csv_cell(&subject["technologies"].to_string()),
+                csv_cell(subject["updated_at"].as_str().unwrap_or("")),
+            ])?;
+        }
+    }
+    writer
+        .into_inner()
+        .map_err(|err| anyhow::anyhow!("CSV error: {err}"))
 }
 
 /// Prevent spreadsheet formula interpretation of attacker-controlled values.

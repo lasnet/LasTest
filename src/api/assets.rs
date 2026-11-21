@@ -15,6 +15,12 @@ pub struct InventoryQuery {
     #[serde(default)]
     q: String,
     #[serde(default)]
+    technology: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
     offset: u32,
 }
 
@@ -29,7 +35,13 @@ pub async fn list(
     let project = resolve_project(&state, &id)?;
     let rows = state
         .db
-        .inventory_rows(&project.id, &query.q)
+        .inventory_rows_filtered(
+            &project.id,
+            &query.q,
+            query.technology.as_deref(),
+            query.provider.as_deref(),
+            query.category.as_deref(),
+        )
         .map_err(ApiError::internal)?;
     let total = rows.len();
     // Clamp after deletion, including deletion of the last row on a page.
@@ -40,6 +52,22 @@ pub async fn list(
         10,
         offset as u32,
     )))
+}
+
+pub async fn detail(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((id, asset_id)): Path<(String, String)>,
+) -> ApiResult {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Viewer)?;
+    let project = resolve_project(&state, &id)?;
+    let asset = state
+        .db
+        .asset_detail(&project.id, &asset_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("asset not found in this project"))?;
+    Ok(Json(json!({"asset": asset})))
 }
 
 pub async fn delete(
@@ -85,7 +113,13 @@ pub async fn export(
     let project = resolve_project(&state, &id)?;
     let rows = state
         .db
-        .inventory_rows(&project.id, &query.q)
+        .inventory_rows_filtered(
+            &project.id,
+            &query.q,
+            query.technology.as_deref(),
+            query.provider.as_deref(),
+            query.category.as_deref(),
+        )
         .map_err(ApiError::internal)?;
     let count = rows.len();
     let data = if format == "csv" {

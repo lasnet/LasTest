@@ -315,9 +315,12 @@
           <h2>Hosts and IP addresses</h2>
           <div class="assets-toolbar">
             <div class="field"><label for="assets-search">Search hosts or IP addresses</label><input id="assets-search" type="search" placeholder="Host or IP address" autocomplete="off"></div>
+            <div class="field"><label for="assets-filter-technology">Technology</label><input id="assets-filter-technology" type="search" placeholder="jira, grafana…" autocomplete="off"></div>
+            <div class="field"><label for="assets-filter-provider">Provider</label><input id="assets-filter-provider" type="search" placeholder="shodan_internetdb" autocomplete="off"></div>
+            <div class="field"><label for="assets-filter-category">Category</label><input id="assets-filter-category" type="search" placeholder="admin, mail…" autocomplete="off"></div>
             <div class="button-row"><button id="assets-export-txt" type="button">Export TXT</button><button id="assets-export-csv" type="button">Export CSV</button></div>
           </div>
-          <p class="muted">Exports include all matching rows across every page. IP addresses without a linked host appear separately.</p>
+          <p class="muted">Exports include all matching rows across every page. IP addresses without a linked host appear separately. Opening a row does not perform network requests.</p>
           <p id="assets-error" class="error" role="alert"></p>
           <div id="assets-inventory" aria-live="polite"></div>
           <nav class="assets-pagination" aria-label="Asset pages">
@@ -325,6 +328,32 @@
             <span id="assets-page-status" role="status"></span>
             <button id="assets-next" type="button">Next</button>
           </nav>
+        </section>
+        <section class="panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Discovery candidates</h2>
+              <p class="muted">Candidates keep provenance and verification history. A confirmed name is only added to Assets after a permitted A/AAAA check.</p>
+            </div>
+            <div class="button-row"><button id="candidates-export-json" type="button">Export JSON</button><button id="candidates-export-csv" type="button">Export CSV</button></div>
+          </header>
+          <div class="assets-toolbar">
+            <div class="field"><label for="candidates-search">Search candidates</label><input id="candidates-search" type="search" placeholder="Hostname" autocomplete="off"></div>
+            <div class="field"><label for="candidates-source">Source</label><select id="candidates-source"><option value="">All sources</option><option value="ptr">PTR</option><option value="shodan_internetdb">Shodan InternetDB</option><option value="censys">Censys</option></select></div>
+            <div class="field"><label for="candidates-dns">DNS verification</label><select id="candidates-dns"><option value="">Any DNS status</option><option value="verified">verified</option><option value="not_checked">not_checked</option><option value="no_addresses">no_addresses</option><option value="dns_error">dns_error</option><option value="not_permitted">not_permitted</option></select></div>
+            <div class="field"><label for="candidates-ip-match">Source IP match</label><select id="candidates-ip-match"><option value="">Any match</option><option value="matched">matched</option><option value="not_matched">not_matched</option><option value="unknown">unknown</option></select></div>
+            <div class="field"><label for="candidates-scope">Current Scope</label><select id="candidates-scope"><option value="">Any scope state</option><option value="allowed">allowed</option><option value="denied">denied</option></select></div>
+            <div class="field"><label for="candidates-confidence">Confidence</label><select id="candidates-confidence"><option value="">Any confidence</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option><option value="unknown">unknown</option></select></div>
+            <div class="field"><label for="candidates-interest">Interest</label><select id="candidates-interest"><option value="">Any interest</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option><option value="unknown">unknown</option></select></div>
+          </div>
+          <p id="candidates-error" class="error" role="alert"></p>
+          <div id="candidates-inventory" aria-live="polite"></div>
+          <nav class="assets-pagination" aria-label="Candidate pages">
+            <button id="candidates-previous" type="button">Previous</button>
+            <span id="candidates-page-status" role="status"></span>
+            <button id="candidates-next" type="button">Next</button>
+          </nav>
+          <div id="provider-catalog" class="muted"></div>
         </section>
         <section class="panel"><h2>URLs</h2><div id="assets-urls"></div></section>
       </section>
@@ -404,6 +433,25 @@
         <button id="apply-scan-settings" type="submit" class="primary">Apply settings</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="candidate-detail-dialog" aria-labelledby="candidate-detail-title">
+    <div class="scan-dialog-heading">
+      <h2 id="candidate-detail-title">Candidate</h2>
+      <button id="close-candidate-detail" type="button" aria-label="Close candidate details">×</button>
+    </div>
+    <div id="candidate-detail-content"></div>
+    <p id="candidate-detail-error" class="error" role="alert"></p>
+    <div class="button-row">
+      <button id="candidate-add-scope" type="button" class="secondary">Add to Scope</button>
+    </div>
+  </dialog>
+  <dialog id="asset-detail-dialog" aria-labelledby="asset-detail-title">
+    <div class="scan-dialog-heading">
+      <h2 id="asset-detail-title">Asset details</h2>
+      <button id="close-asset-detail" type="button" aria-label="Close asset details">×</button>
+    </div>
+    <div id="asset-detail-content"></div>
+    <p id="asset-detail-error" class="error" role="alert"></p>
   </dialog>
   <div id="notice" class="notice" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   <script src="/app.js" defer></script>

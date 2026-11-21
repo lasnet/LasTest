@@ -69,6 +69,9 @@ pub struct CompleteOutcome {
     pub observations: Vec<NewObservation>,
     pub findings: Vec<NewFinding>,
     pub artifacts: Vec<NewArtifact>,
+    pub candidates: Vec<crate::domain::NewCandidate>,
+    pub enrichments: Vec<crate::domain::NewEnrichment>,
+    pub classifications: Vec<crate::domain::NewClassification>,
 }
 
 fn map_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
@@ -509,6 +512,16 @@ impl Db {
                 ],
             )?;
         }
+        super::discovery::publish_discovery(
+            &tx,
+            &project_id,
+            job_id,
+            attempt_id,
+            &now,
+            &outcome.candidates,
+            &outcome.enrichments,
+            &outcome.classifications,
+        )?;
         tx.execute(
             "UPDATE jobs SET status = ?1, finished_at = ?2, error = ?3, result = ?4,
                              counters = ?5, current_attempt_id = NULL, cancel_requested = 0
@@ -899,6 +912,71 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_chain_stage_input_refs(
+        &self,
+        run_id: &str,
+        position: i64,
+        input_refs: &[i64],
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE chain_stages SET input_refs = ?1 WHERE chain_run_id = ?2 AND position = ?3",
+            params![serde_json::to_string(input_refs)?, run_id, position],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_chain_preset(&self, run_id: &str, preset: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE chain_runs SET preset = ?1 WHERE id = ?2",
+            params![preset, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Input jobs for a chain stage. Explicit `input_refs` select stages of the
+    /// same run; legacy chains fall back to the immediate predecessor.
+    pub fn chain_input_jobs(&self, run_id: &str, position: i64) -> Result<Vec<Job>> {
+        let conn = self.connect()?;
+        let refs: Option<String> = conn
+            .query_row(
+                "SELECT input_refs FROM chain_stages WHERE chain_run_id = ?1 AND position = ?2",
+                params![run_id, position],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        let positions: Vec<i64> = refs
+            .and_then(|raw| serde_json::from_str::<Vec<i64>>(&raw).ok())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        if positions.is_empty() {
+            if let Some(previous) = self.previous_chain_job(run_id, position)? {
+                out.push(previous);
+            }
+            return Ok(out);
+        }
+        for expected in positions {
+            if expected >= position {
+                continue;
+            }
+            if let Some(job) = conn
+                .query_row(
+                    &format!(
+                        "SELECT {JOB_COLUMNS} FROM jobs WHERE chain_run_id = ?1 AND chain_order = ?2"
+                    ),
+                    params![run_id, expected],
+                    map_job,
+                )
+                .optional()?
+            {
+                out.push(job);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn skip_chain_stage(&self, run_id: &str, position: i64, reason: &str) -> Result<()> {
         let conn = self.connect()?;
         conn.execute(
@@ -923,7 +1001,7 @@ impl Db {
         let conn = self.connect()?;
         let base = conn
             .query_row(
-                "SELECT id, project_id, name, status, created_by, created_at, finished_at
+                "SELECT id, project_id, name, status, created_by, created_at, finished_at, preset
                  FROM chain_runs WHERE id = ?1",
                 params![run_id],
                 |row| {
@@ -935,6 +1013,7 @@ impl Db {
                         "created_by": row.get::<_, String>(4)?,
                         "created_at": row.get::<_, String>(5)?,
                         "finished_at": row.get::<_, Option<String>>(6)?,
+                        "preset": row.get::<_, Option<String>>(7)?,
                     }))
                 },
             )
@@ -943,7 +1022,7 @@ impl Db {
             return Ok(None);
         };
         let mut stmt = conn.prepare(
-            "SELECT id, position, task_type, job_id, input_from, required, skipped_reason
+            "SELECT id, position, task_type, job_id, input_from, required, skipped_reason, input_refs
              FROM chain_stages WHERE chain_run_id = ?1 ORDER BY position",
         )?;
         let stages = stmt
@@ -956,6 +1035,9 @@ impl Db {
                     "input_from": row.get::<_, Option<String>>(4)?,
                     "required": row.get::<_, i64>(5)? != 0,
                     "skipped_reason": row.get::<_, Option<String>>(6)?,
+                    "input_refs": row.get::<_, Option<String>>(7)?
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .unwrap_or_else(|| json!([])),
                 }))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

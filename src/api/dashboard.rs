@@ -196,9 +196,19 @@ pub async fn export_report(
             "text/csv; charset=utf-8",
             "csv",
         ),
+        "discovery-json" => (
+            report::render_discovery_json(&snapshot).map_err(ApiError::internal)?,
+            "application/json",
+            "discovery.json",
+        ),
+        "discovery-csv" => (
+            report::render_discovery_csv(&snapshot).map_err(ApiError::internal)?,
+            "text/csv; charset=utf-8",
+            "discovery.csv",
+        ),
         _ => {
             return Err(ApiError::not_found(
-                "unsupported report format; use json or csv",
+                "unsupported report format; use json, csv, discovery-json or discovery-csv",
             ))
         }
     };

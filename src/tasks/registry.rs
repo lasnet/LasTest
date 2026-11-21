@@ -24,6 +24,8 @@ pub const TASK_NAMES: &[&str] = &[
     "dns.records",
     "dns.wordlist",
     "reverse.ip",
+    "assets.enrich",
+    "assets.classify",
     "http.probe",
     "urls.passive",
     "http.crawl",
@@ -39,7 +41,6 @@ pub fn is_known(name: &str) -> bool {
 
 pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
     let nmap_available = nmap_available(config);
-    let censys_configured = config.censys_api_id.is_some() && config.censys_api_secret.is_some();
     let mut items = vec![
         TaskTypeInfo {
             name: "subdomains.subfinder",
@@ -135,26 +136,85 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
             name: "reverse.ip",
             title: "PTR and passive reverse IP",
             category: "recon",
-            result_format_version: "1",
+            result_format_version: "2",
             available: true,
-            unavailable_reason: if censys_configured {
-                None
-            } else {
-                Some("Censys is not configured; Shodan InternetDB remains available".to_string())
-            },
+            unavailable_reason: None,
             requires_explicit_scope: "ip/cidr",
             params_schema: json!({
                 "type": "object",
                 "properties": {
                     "ips": {"type": "array", "items": {"type": "string"}},
-                    "providers": {"type": "array", "items": {"enum": ["shodan_internetdb","censys"]}}
+                    "sources": {
+                        "type": "array",
+                        "items": {"enum": ["ptr","shodan_internetdb","censys"]},
+                        "description": "Select exactly the passive sources; an empty list is rejected"
+                    },
+                    "providers": {
+                        "type": "array",
+                        "items": {"enum": ["shodan_internetdb","censys"]},
+                        "deprecated": true,
+                        "description": "Legacy parameter; keeps PTR and defaults to Shodan when empty"
+                    }
                 },
                 "required": ["ips"],
                 "additionalProperties": false
             }),
-            limits: json!({"max_ips": 128, "timeout_seconds": config.http_timeout_seconds}),
+            limits: json!({"max_ips": 128, "max_candidates": config.provider_max_candidates, "timeout_seconds": config.http_timeout_seconds}),
             inputs: vec!["explicit IP/CIDR scope"],
-            outputs: vec!["IP and PTR observations", "provider observations"],
+            outputs: vec![
+                "candidates and evidence",
+                "IP and PTR observations",
+                "provider observations",
+            ],
+        },
+        TaskTypeInfo {
+            name: "assets.enrich",
+            title: "Asset enrichment (DNS, stored HTTP, optional active HTTP)",
+            category: "assets",
+            result_format_version: "1",
+            available: true,
+            unavailable_reason: None,
+            requires_explicit_scope: "candidate",
+            params_schema: json!({
+                "type": "object",
+                "properties": {
+                    "candidate_ids": {"type": "array", "items": {"type": "string"}},
+                    "asset_ids": {"type": "array", "items": {"type": "string"}},
+                    "http_enrichment": {"type": "boolean", "default": false},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": config.max_queue_targets}
+                },
+                "additionalProperties": false
+            }),
+            limits: json!({"max_candidates": config.max_discovery_candidates, "http_timeout_seconds": config.http_timeout_seconds}),
+            inputs: vec!["project-local candidate IDs", "committed chain candidates"],
+            outputs: vec!["enrichment snapshot", "DNS/HTTP observations"],
+        },
+        TaskTypeInfo {
+            name: "assets.classify",
+            title: "Asset classification and technology routing",
+            category: "assets",
+            result_format_version: "1",
+            available: true,
+            unavailable_reason: None,
+            requires_explicit_scope: "candidate",
+            params_schema: json!({
+                "type": "object",
+                "properties": {
+                    "candidate_ids": {"type": "array", "items": {"type": "string"}},
+                    "asset_ids": {"type": "array", "items": {"type": "string"}},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": config.max_queue_targets}
+                },
+                "additionalProperties": false
+            }),
+            limits: json!({"catalog_version": crate::tasks::tech_catalog::CATALOG_VERSION, "max_candidates": config.max_discovery_candidates}),
+            inputs: vec![
+                "project-local candidates/assets",
+                "committed chain candidates and enrichments",
+            ],
+            outputs: vec![
+                "technology groups",
+                "categories and confidence/interest with evidence",
+            ],
         },
         TaskTypeInfo {
             name: "http.probe",
@@ -324,6 +384,27 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
             limits: json!({}),
             inputs: vec!["in-scope domains/targets"],
             outputs: vec!["linked stage jobs"],
+        },
+        TaskTypeInfo {
+            name: "chain.asset_discovery",
+            title: "Asset Discovery preset chain",
+            category: "chain",
+            result_format_version: "1",
+            available: true,
+            unavailable_reason: None,
+            requires_explicit_scope: "ip/cidr",
+            params_schema: json!({
+                "type": "object",
+                "properties": {
+                    "ips": {"type": "array", "items": {"type": "string"}},
+                    "sources": {"type": "array", "items": {"enum": ["ptr","shodan_internetdb","censys"]}},
+                    "http_enrichment": {"type": "boolean", "default": false}
+                },
+                "additionalProperties": false
+            }),
+            limits: json!({"max_ips": 128}),
+            inputs: vec!["approved explicit IP scope"],
+            outputs: vec!["reverse.ip -> assets.enrich -> assets.classify"],
         },
     ];
     items.sort_by(|a, b| a.name.cmp(b.name));

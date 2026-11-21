@@ -19,7 +19,7 @@ pub struct Socks5Profile {
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub data_dir: PathBuf,
@@ -51,6 +51,19 @@ pub struct Config {
     pub censys_url: String,
     pub censys_api_id: Option<String>,
     pub censys_api_secret: Option<String>,
+    pub censys_pat: Option<String>,
+    pub censys_organization_id: Option<String>,
+    pub censys_platform_url: String,
+    pub provider_cache_ttl_seconds: i64,
+    pub provider_negative_cache_ttl_seconds: i64,
+    pub provider_cache_max_entries: usize,
+    pub provider_min_interval_ms: u64,
+    pub provider_cooldown_seconds: i64,
+    pub provider_reservation_seconds: i64,
+    pub provider_max_retries: u32,
+    pub provider_max_candidates: usize,
+    pub discovery_refresh_seconds: i64,
+    pub max_discovery_candidates: usize,
     pub session_cookie_names: Vec<String>,
     pub tls_expiry_warning_days: i64,
     pub nmap_path: Option<PathBuf>,
@@ -62,6 +75,39 @@ pub struct Config {
     pub nmap_max_output_bytes: u64,
     pub socks5_profiles: Vec<Socks5Profile>,
     pub log_level: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print credentials in diagnostics.
+        f.debug_struct("Config")
+            .field("data_dir", &self.data_dir)
+            .field("bind", &self.bind)
+            .field("dns_server", &self.dns_server)
+            .field("secure_cookies", &self.secure_cookies)
+            .field("retention_days", &self.retention_days)
+            .field("certspotter_url", &self.certspotter_url)
+            .field("wayback_url", &self.wayback_url)
+            .field("commoncrawl_url", &self.commoncrawl_url)
+            .field("shodan_internetdb_url", &self.shodan_internetdb_url)
+            .field("censys_url", &self.censys_url)
+            .field("censys_platform_url", &self.censys_platform_url)
+            .field(
+                "censys_api_id",
+                &self.censys_api_id.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "censys_api_secret",
+                &self.censys_api_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "censys_pat",
+                &self.censys_pat.as_ref().map(|_| "<redacted>"),
+            )
+            .field("censys_organization_id", &self.censys_organization_id)
+            .field("log_level", &self.log_level)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Config {
@@ -97,6 +143,19 @@ impl Default for Config {
             censys_url: "https://search.censys.io/api/v2/hosts".to_string(),
             censys_api_id: None,
             censys_api_secret: None,
+            censys_pat: None,
+            censys_organization_id: None,
+            censys_platform_url: "https://api.platform.censys.io/v3/global/asset/host".to_string(),
+            provider_cache_ttl_seconds: 86_400,
+            provider_negative_cache_ttl_seconds: 300,
+            provider_cache_max_entries: 10_000,
+            provider_min_interval_ms: 250,
+            provider_cooldown_seconds: 60,
+            provider_reservation_seconds: 120,
+            provider_max_retries: 3,
+            provider_max_candidates: 1_000,
+            discovery_refresh_seconds: 3_600,
+            max_discovery_candidates: 1_000,
             session_cookie_names: vec!["session".to_string(), "sessionid".to_string()],
             tls_expiry_warning_days: 30,
             nmap_path: None,
@@ -135,13 +194,24 @@ impl Config {
         config.apply_env()?;
         config.certspotter_token = config
             .certspotter_token
-            .filter(|value| !value.trim().is_empty());
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         config.censys_api_id = config
             .censys_api_id
-            .filter(|value| !value.trim().is_empty());
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         config.censys_api_secret = config
             .censys_api_secret
-            .filter(|value| !value.trim().is_empty());
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        config.censys_pat = config
+            .censys_pat
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        config.censys_organization_id = config
+            .censys_organization_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         config
             .socks5_profiles
             .retain(|profile| !profile.name.trim().is_empty());
@@ -205,6 +275,31 @@ impl Config {
                 self.censys_api_secret = Some(value);
             }
         }
+        if let Ok(value) = std::env::var("LASTEST_CENSYS_PAT") {
+            if !value.trim().is_empty() {
+                self.censys_pat = Some(value);
+            }
+        }
+        if let Ok(value) = std::env::var("LASTEST_CENSYS_ORGANIZATION_ID") {
+            if !value.trim().is_empty() {
+                self.censys_organization_id = Some(value);
+            }
+        }
+        if let Ok(value) = std::env::var("LASTEST_CENSYS_PLATFORM_URL") {
+            if !value.trim().is_empty() {
+                self.censys_platform_url = value;
+            }
+        }
+        if let Ok(value) = std::env::var("LASTEST_PROVIDER_CACHE_TTL_SECONDS") {
+            self.provider_cache_ttl_seconds = value
+                .parse()
+                .context("LASTEST_PROVIDER_CACHE_TTL_SECONDS must be an integer")?;
+        }
+        if let Ok(value) = std::env::var("LASTEST_PROVIDER_NEGATIVE_CACHE_TTL_SECONDS") {
+            self.provider_negative_cache_ttl_seconds = value
+                .parse()
+                .context("LASTEST_PROVIDER_NEGATIVE_CACHE_TTL_SECONDS must be an integer")?;
+        }
         if let Ok(value) = std::env::var("LASTEST_NMAP_PATH") {
             if !value.trim().is_empty() {
                 self.nmap_path = Some(PathBuf::from(value));
@@ -240,6 +335,61 @@ impl Config {
         }
         if self.certspotter_url.trim().is_empty() {
             anyhow::bail!("certspotter_url must not be empty");
+        }
+        if self.censys_platform_url.trim().is_empty() {
+            anyhow::bail!("censys_platform_url must not be empty");
+        }
+        for (name, endpoint) in [
+            ("shodan_internetdb_url", &self.shodan_internetdb_url),
+            ("censys_url", &self.censys_url),
+            ("censys_platform_url", &self.censys_platform_url),
+        ] {
+            let parsed =
+                url::Url::parse(endpoint).map_err(|_| anyhow::anyhow!("invalid {name}"))?;
+            let loopback = parsed.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            });
+            anyhow::ensure!(
+                parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback),
+                "{name} must use HTTPS (HTTP is only supported for loopback fixtures)"
+            );
+            anyhow::ensure!(
+                parsed.host_str().is_some()
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none(),
+                "{name} must be an endpoint without embedded credentials, query or fragment"
+            );
+        }
+        anyhow::ensure!(
+            (1..=5).contains(&self.provider_max_retries),
+            "provider_max_retries must be between 1 and 5"
+        );
+        anyhow::ensure!(
+            self.provider_reservation_seconds > 0 && self.provider_cooldown_seconds > 0,
+            "provider reservation and cooldown durations must be positive"
+        );
+        if self.provider_cache_ttl_seconds <= 0 {
+            anyhow::bail!("provider_cache_ttl_seconds must be positive");
+        }
+        if self.provider_negative_cache_ttl_seconds <= 0 {
+            anyhow::bail!("provider_negative_cache_ttl_seconds must be positive");
+        }
+        if self.provider_cache_max_entries == 0 {
+            anyhow::bail!("provider_cache_max_entries must be positive");
+        }
+        if self.provider_max_candidates == 0 {
+            anyhow::bail!("provider_max_candidates must be positive");
+        }
+        if self.max_discovery_candidates == 0 {
+            anyhow::bail!("max_discovery_candidates must be positive");
+        }
+        if self.discovery_refresh_seconds < 0 {
+            anyhow::bail!("discovery_refresh_seconds must not be negative");
         }
         for range in &self.internal_ranges {
             range
@@ -323,5 +473,120 @@ fn parse_bool(value: &str) -> Result<bool> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
         other => anyhow::bail!("invalid boolean value: {other}"),
+    }
+}
+
+/// Effective Censys transport selected from installation configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CensysMode {
+    Platform,
+    Legacy,
+    NotConfigured,
+    Incomplete,
+}
+
+impl CensysMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Platform => "platform_v3_pat",
+            Self::Legacy => "legacy_v2_basic",
+            Self::NotConfigured => "not_configured",
+            Self::Incomplete => "incomplete_configuration",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CensysIntegration {
+    pub mode: CensysMode,
+    pub configured: bool,
+    pub requires_key: bool,
+    pub reason: Option<String>,
+    pub endpoint: String,
+    pub legacy_deprecated: bool,
+}
+
+impl Config {
+    /// Single small interface that task code uses to obtain provider
+    /// configuration. A future Settings UI can replace the source without
+    /// changing task implementations.
+    pub fn censys_integration(&self) -> CensysIntegration {
+        let has_pat = self.censys_pat.is_some();
+        let has_id = self.censys_api_id.is_some();
+        let has_secret = self.censys_api_secret.is_some();
+        if has_pat {
+            return CensysIntegration {
+                mode: CensysMode::Platform,
+                configured: true,
+                requires_key: true,
+                reason: None,
+                endpoint: self.censys_platform_url.clone(),
+                legacy_deprecated: false,
+            };
+        }
+        if has_id && has_secret {
+            return CensysIntegration {
+                mode: CensysMode::Legacy,
+                configured: true,
+                requires_key: true,
+                reason: Some(
+                    "legacy Censys v2 Basic credentials are deprecated; migrate to a Platform PAT"
+                        .to_string(),
+                ),
+                endpoint: self.censys_url.clone(),
+                legacy_deprecated: true,
+            };
+        }
+        if has_id || has_secret {
+            return CensysIntegration {
+                mode: CensysMode::Incomplete,
+                configured: false,
+                requires_key: true,
+                reason: Some(
+                    "Censys legacy credentials require both api_id and api_secret".to_string(),
+                ),
+                endpoint: self.censys_url.clone(),
+                legacy_deprecated: true,
+            };
+        }
+        CensysIntegration {
+            mode: CensysMode::NotConfigured,
+            configured: false,
+            requires_key: true,
+            reason: Some(
+                "Censys is not configured; PTR and Shodan InternetDB remain available".to_string(),
+            ),
+            endpoint: String::new(),
+            legacy_deprecated: false,
+        }
+    }
+
+    pub fn provider_catalog(&self) -> serde_json::Value {
+        let censys = self.censys_integration();
+        serde_json::json!({
+            "ptr": {
+                "configured": true,
+                "requires_key": false,
+                "mode": "dns_ptr",
+                "available": true,
+                "reason": null
+            },
+            "shodan_internetdb": {
+                "configured": true,
+                "requires_key": false,
+                "mode": "internetdb",
+                "available": true,
+                "reason": null
+            },
+            "censys": {
+                "configured": censys.configured,
+                "requires_key": censys.requires_key,
+                "mode": censys.mode.as_str(),
+                "available": censys.configured,
+                "reason": censys.reason,
+                "legacy_deprecated": censys.legacy_deprecated
+            }
+        })
     }
 }

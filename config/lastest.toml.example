@@ -38,6 +38,24 @@ shodan_internetdb_url = "https://internetdb.shodan.io"
 censys_url = "https://search.censys.io/api/v2/hosts"
 censys_api_id = ""
 censys_api_secret = ""
+# Censys Platform v3 with a Personal Access Token. When set, it takes
+# precedence over the legacy Basic pair and is sent only to the platform URL.
+censys_pat = ""
+# Optional organization for installation-wide access in hosted Censys.
+censys_organization_id = ""
+censys_platform_url = "https://api.platform.censys.io/v3/global/asset/host"
+
+# Installation-wide passive-provider cache, cooldown and retry limits.
+provider_cache_ttl_seconds = 86400
+provider_negative_cache_ttl_seconds = 300
+provider_cache_max_entries = 10000
+provider_min_interval_ms = 250
+provider_cooldown_seconds = 60
+provider_reservation_seconds = 120
+provider_max_retries = 3
+provider_max_candidates = 1000
+discovery_refresh_seconds = 3600
+max_discovery_candidates = 1000
 
 # Optional DNS server (host:port) for split-horizon/local stands.
 # dns_server = "127.0.0.1:5353"

@@ -46,6 +46,7 @@
 | `POST /auth/logout` | auth | отзыв текущей сессии |
 | `GET /auth/me` | auth | пользователь и роль |
 | `GET /task-types` | viewer | типизированный каталог, доступность, лимиты, web-правила, исключения |
+| `GET /providers` | viewer | read-only интеграции: `configured`, `requires_key`, реальный режим Censys, причина; без ключей |
 | `GET /projects` | viewer | пагинация проектов |
 | `POST /projects` | analyst | создать проект и черновик scope |
 | `GET /projects/{id}` | viewer | проект, текущий scope, история ревизий |
@@ -61,11 +62,15 @@
 | `GET /chains/{id}` | viewer | стадии, пропуски и причины |
 | `POST /chains/{id}/cancel` | analyst | отмена незавершённых стадий |
 | `GET /projects/{id}/dashboard` | viewer | метрики, источники, покрытие правил |
-| `GET /projects/{id}/assets?q=&offset=` | viewer | общая таблица хостов и IP, поиск, страницы по 10 строк |
-| `GET /projects/{id}/assets/export/{txt|csv}?q=` | viewer | все строки таблицы с учётом поиска |
+| `GET /projects/{id}/assets?q=&offset=&technology=&provider=&category=` | viewer | общая таблица хостов и IP, поиск, фильтры, страницы по 10 строк |
+| `GET /projects/{id}/assets/{asset_id}` | viewer | карточка из сохранённых данных: DNS, HTTP, порты, сеть, candidate, enrichment, classification |
+| `GET /projects/{id}/assets/export/{txt|csv}?q=&technology=&provider=&category=` | viewer | все строки таблицы с учётом поиска и фильтров |
 | `DELETE /projects/{id}/assets/{asset_id}` | analyst | удаление хоста или отдельного IP с аудитом |
+| `GET /projects/{id}/discovery/candidates?q=&source=&dns_status=&ip_match=&scope_status=&confidence=&interest=&limit=&offset=` | viewer | кандидаты проекта с пересчитанным по текущему Scope статусом |
+| `GET /projects/{id}/discovery/candidates/{candidate_id}` | viewer | происхождение, проверки, enrichment и classification кандидата |
+| `GET /projects/{id}/discovery/export/{json|csv}` | viewer | отдельный расширенный экспорт кандидатов |
 | `GET /evidence/{artifact_id}` | viewer | опубликованное доказательство |
-| `GET /projects/{id}/reports/{json|csv}` | viewer | снимок отчёта |
+| `GET /projects/{id}/reports/{json|csv|discovery-json|discovery-csv}` | viewer | снимок отчёта; discovery-* — аддитивный расширенный вариант |
 | `GET/POST /users`, `PATCH /users/{id}`, `GET /audit` | admin | пользователи и аудит |
 
 `{id}` проекта принимает стабильный ID или имя проекта для удобства CLI; ответы всегда содержат стабильный ID.
@@ -159,15 +164,25 @@ Idempotency-Key: optional
 
 Создаются связанные стадии `subdomains.discover → dns.records → http.probe → urls.passive → http.crawl → web.checks`. Каждая стадия ждёт терминального состояния предыдущей. Продолжение после `partial` разрешено; после `failed/cancelled/interrupted` зависимая стадия пропускается с причиной.
 
+### Пресет Asset Discovery
+
+```json
+{"preset":"asset_discovery","ips":["203.0.113.10"],"sources":["ptr","shodan_internetdb"],"http_enrichment":false,"idempotency_key":"disc-1"}
+```
+
+Если `ips` пуст, backend берёт явные IP-записи утверждённого Scope; CIDR в UI не разворачивается. Создаются стадии `reverse.ip → assets.enrich → assets.classify` с явными `input_refs`: enrich читает только committed output reverse.ip этого запуска, classify — reverse.ip и assets.enrich. Отсутствие `preset` сохраняет прежний All in one. Неизвестный preset и пустой `sources` отклоняются. Значения `ips`, `sources` и `http_enrichment` фиксируются в запуске; scope snapshot закрепляется действующим механизмом jobs. В `GET /chains/{id}` стадии содержат `input_refs`, а результат каждой стадии — счётчики и снимок входов.
+
 ## Dashboard и отчёты
 
-Assets объединяет хосты с их IPv4/IPv6 по сохранённым DNS, PTR и HTTP-наблюдениям, включая импорт 1.x. Новые DNS-запросы при просмотре не выполняются. Одна строка содержит `id`, `kind`, `host`, `ips`, `last_seen`. IP без связанного хоста имеет `host: null`. Поиск `q` — буквальное вхождение без учёта регистра в имя хоста или IP; он применяется ко всему проекту, до пагинации. Ответ использует `items`, `total`, `limit: 10`, `offset`; выходящий за диапазон offset возвращает последнюю страницу. TXT (табуляция) и CSV содержат Hosts, IP addresses, Last seen и выгружают все совпадения, независимо от страницы.
+Assets объединяет хосты с их IPv4/IPv6 по сохранённым DNS, PTR и HTTP-наблюдениям, включая импорт 1.x. Новые DNS-запросы при просмотре не выполняются. Одна строка содержит `id`, `kind`, `host`, `ips`, `last_seen`; аддитивно возвращаются `groups`, `technologies`, `categories`, `confidence`, `interest`, `providers`. IP без связанного хоста имеет `host: null`. Поиск `q` — буквальное вхождение без учёта регистра в имя хоста или IP; он применяется ко всему проекту, до пагинации. Фильтры `technology`, `provider` и `category` работают по сохранённым классификациям и происхождению, без сети. Ответ использует `items`, `total`, `limit: 10`, `offset`; выходящий за диапазон offset возвращает последнюю страницу. TXT (табуляция) и CSV содержат Hosts, IP addresses, Last seen и выгружают все совпадения, независимо от страницы.
+
+`GET /projects/{id}/discovery/candidates` возвращает кандидатов с `hostname`, `sources`, `dns_status` (`not_checked|verified|no_addresses|dns_error|not_permitted`), `ip_match` (`matched|not_matched|unknown`), `addresses`, `scope_status_at_check` и пересчитанным `current_scope_status`. Фильтр `scope_status` использует текущий Scope. Значения фильтров валидируются. Detail содержит историю evidence, enrichment и classification; чужие candidate/asset IDs дают `404`.
 
 Удаление хоста атомарно очищает его запись, наблюдения, URL и находки с точным совпадением имени хоста (без поддоменов). Все IP-записи и наблюдения других хостов сохраняются. Освободившийся IP появляется отдельной строкой. Удаление связанного с хостом IP через API отклоняется с `409 ip_in_use`; отдельный IP можно удалить вместе с его наблюдениями и находками. Успех — `204`, отсутствующий в проекте актив — `404`. Scope, задания и файлы доказательств остаются; будущий запуск или повторный импорт может обнаружить удалённый актив заново. Действия записываются как `asset.delete` и `asset.export`.
 
 `GET /projects/{id}/dashboard` возвращает `data_status` (`empty|partial|ready`), метрики, наблюдения по источникам, HTTP, порты (кандидаты отдельно от подтверждённых), находки, покрытие web-правил и недоступные источники. Данные читаются из SQLite, не из mock.
 
-`GET /projects/{id}/reports/json|csv` строит снимок проекта: scope и история, jobs, DNS, HTTP, URL, службы, domain→IP, источники, находки. CSV нейтрализует внешние значения, начинающиеся с `= + - @`, tab или CR.
+`GET /projects/{id}/reports/json|csv` строит снимок проекта: scope и история, jobs, DNS, HTTP, URL, службы, domain→IP, источники, находки. Аддитивно JSON содержит `candidates`, `enrichment` и `classification` с версиями, временем и provenance. `discovery-json`/`discovery-csv` — отдельный явный расширенный вариант; стандартный CSV/TXT Assets не меняется. CSV нейтрализует внешние значения, начинающиеся с `= + - @`, tab или CR. Отчёты и экспорт не выполняют сетевых запросов и не возвращают секреты или общий кэш провайдеров.
 
 ## Пользователи
 
@@ -186,3 +201,26 @@ PATCH /api/users/usr_...
 Независимые задания выполняются параллельно: `limitations.max_concurrent_jobs` в каталоге показывает лимит одного процесса worker (по умолчанию 4). Цепочки остаются последовательными. В `subdomains.subfinder` отсутствие A/AAAA сохраняется как `rejected[].reason: no_addresses` без ошибки задания. В CT-артефакте `sources[].status` может быть `partial`: имена с успешно прочитанных страниц сохраняются вместе с `reason` последующего сбоя.
 
 Для `subdomains.subfinder`, `subdomains.discover`, `dns.records` и `dns.wordlist` наличие A/AAAA обязательно перед публикацией имени в Assets. `subdomains.subfinder.resolve` объявлен устаревшим: старые значения, включая `false`, принимаются, но фактически выполняется `resolve=true`. CT wildcard-шаблоны сохраняются только в артефакте. У CT, DNS records и DNS wordlist результат v1 дополнен `hosts` (имя, `ips`, `dns_verified`) и `rejected`; список `subdomains` CT содержит только подтверждённые имена. В DNS records `record_types` определяет поля `records` артефакта, а проверка A/AAAA выполняется дополнительно независимо от выбора типов. Исторические Assets и импортированные результаты автоматически не удаляются.
+
+### Asset Discovery: validation and snapshots
+
+Discovery list/export apply the same validated source, DNS, IP-match, current-Scope,
+confidence and interest filters. Pagination totals cover the complete matching
+inventory; bounded JSON exports include `total` and `truncated`. Candidate detail
+returns up to 200 recent evidence entries. The immutable job artifacts retain
+run results. Classification history is kept in these artifacts and source evidence,
+not recursively embedded into the latest classification row.
+
+Explicit candidate/asset IDs must belong to the selected project; missing or foreign
+IDs never select a fallback project sample. Chain inputs read candidate checks and
+observations published by their referenced jobs, even if another run subsequently
+updates the same candidate. Reusing a chain idempotency key with different inputs
+returns HTTP 409. Omitting Discovery sources selects PTR and Shodan InternetDB.
+
+Provider cache namespaces include a one-way hash of the effective credentials and
+organization context. Credential rotation does not reuse an earlier credential's
+response. Every actual request, including retries, observes the installation-wide
+rate limit and the current approved IP scope. Provider endpoint URLs must use HTTPS;
+HTTP is accepted only for loopback test fixtures. URLs with embedded credentials,
+query strings or fragments are rejected. The provider catalog never exposes endpoints
+or credentials and reports configuration rather than claiming a successful connection.
