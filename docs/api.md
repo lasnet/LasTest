@@ -171,6 +171,8 @@ Idempotency-Key: optional
 
 Статусы: `queued`, `running`, `succeeded`, `partial`, `failed`, `cancelled`, `interrupted`. После утраты lease старая попытка не может опубликовать результаты. Активный прогон с возможным побочным эффектом после сбоя требует нового запуска.
 
+В UI технические `succeeded` и `partial` отображаются как Completed; ошибки отдельных проверок показываются счётчиком Errors и свёрнутыми Error details. `failed` отображается отдельно как Failed. Для reverse.ip отсутствие PTR (NXDOMAIN/NODATA) имеет статус источника `empty` и не увеличивает Errors. Summary-артефакт assets.enrich содержит `candidates[].http_errors` (URL и причина) для целей, где активное HTTP-обогащение не получило ответа.
+
 ## Цепочка All in one
 
 ```json

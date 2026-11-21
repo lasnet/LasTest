@@ -505,6 +505,10 @@ tbody tr:hover { background: var(--canvas); }
 .job-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px 10px; margin: 0; }
 .job-counters dt { color: var(--muted); font-size: 12px; }
 .job-counters dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.job-counters .job-counter-errors :is(dt, dd) { color: var(--danger); }
+.job-error-details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.job-error-details[open] summary { margin-bottom: 8px; }
+.job-error-message { white-space: pre-wrap; overflow-wrap: anywhere; margin-block: 6px; }
 .report-panel { padding-bottom: 20px; }
 .report-panel .button-row { margin-top: 14px; }
 

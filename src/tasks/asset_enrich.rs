@@ -546,12 +546,16 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             asset_id,
             data: data.clone(),
         });
-        summaries.push(json!({
+        let mut summary = json!({
             "host": host,
             "dns_status": dns_status,
             "ip_match": ip_match,
             "http_enriched": before_http < http_count,
-        }));
+        });
+        if before_http == http_count && !http_errors.is_empty() {
+            summary["http_errors"] = json!(http_errors);
+        }
+        summaries.push(summary);
         outcome.processed();
     }
     for asset in ip_assets {
@@ -564,6 +568,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         let passive = provider_passive(&observations);
         let mut http = saved_http(&observations);
         let mut errors = Vec::new();
+        let before_http = http_count;
         if let Some(prober) = &prober {
             let authority = if ip.contains(':') {
                 format!("[{ip}]")
@@ -594,7 +599,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                     Err(error) => errors.push(json!({"url":url,"reason":error.to_string()})),
                 }
             }
-            if http.is_empty() {
+            if before_http == http_count {
                 outcome.error(format!("HTTP enrichment failed for {ip}"));
             }
         }
@@ -611,7 +616,11 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             asset_id: asset["id"].as_str().map(str::to_string),
             data,
         });
-        summaries.push(json!({"host":ip,"dns_status":"not_applicable"}));
+        let mut summary = json!({"host":ip,"dns_status":"not_applicable","http_enriched":before_http < http_count});
+        if before_http == http_count && !errors.is_empty() {
+            summary["http_errors"] = json!(errors);
+        }
+        summaries.push(summary);
         outcome.processed();
     }
     let has_errors = outcome.counters.errors > 0 || !outcome.errors.is_empty();

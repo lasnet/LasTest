@@ -444,6 +444,7 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
             candidates: 0,
             status: "ok".to_string(),
         };
+        let source_status_start = provider_status.len();
         if use_ptr {
             summary.sources.push("ptr".to_string());
             match dns.reverse(ip).await {
@@ -494,14 +495,27 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                         }
                     }
                     summary.candidates += found;
+                    provider_status.push(json!({
+                        "provider": "ptr", "ip": ip.to_string(),
+                        "status": if found == 0 { "empty" } else { "ok" },
+                        "candidates": found,
+                    }));
+                }
+                Err(err) if crate::net::dns::is_no_records(&err) => {
+                    provider_status.push(json!({
+                        "provider": "ptr", "ip": ip.to_string(), "status": "empty",
+                        "reason": "no PTR records",
+                    }));
                 }
                 Err(err) => {
+                    ctx.ensure_active()?;
+                    let message = crate::net::dns::error_message(&err);
                     summary.status = "unavailable".to_string();
                     provider_status.push(json!({
                         "provider": "ptr", "ip": ip.to_string(), "status": "unavailable",
-                        "reason": format!("{err}")
+                        "reason": message
                     }));
-                    outcome.error(format!("PTR {ip}: {err}"));
+                    outcome.error(format!("PTR {ip}: {message}"));
                 }
             }
         }
@@ -649,6 +663,19 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                 continue;
             }
             outcome.error(format!("unsupported reverse IP source: {provider_name}"));
+        }
+        let source_statuses = &provider_status[source_status_start..];
+        let successful_source = source_statuses
+            .iter()
+            .any(|source| matches!(source["status"].as_str(), Some("ok" | "empty")));
+        if summary.status != "ok" && successful_source {
+            summary.status = "partial".into();
+        } else if summary.status == "ok"
+            && !source_statuses
+                .iter()
+                .any(|source| source["status"] == "ok")
+        {
+            summary.status = "empty".into();
         }
         ip_summaries.push(json!({
             "ip": ip.to_string(),

@@ -34,6 +34,7 @@
     scopeSaving: false,
     taskTypes: [],
     jobs: [],
+    jobErrorsOpen: new Set(),
     view: "dashboard",
     poll: null,
     loading: false,
@@ -218,6 +219,7 @@
     state.scopeHistory = [];
     state.rules = [];
     state.jobs = [];
+    state.jobErrorsOpen.clear();
     $("#scope-note").value = "";
     $("#login-view").hidden = true;
     $("#app-view").hidden = false;
@@ -560,9 +562,7 @@
       const heading = el("div");
       if (module) heading.appendChild(el("p", module.title, "muted"));
       heading.appendChild(el("strong", job.task_type));
-      const status = el("span", job.status === "partial" ? "Completed with errors" : job.status,
-        `badge ${statusClass(job.status)}`);
-      status.title = job.status;
+      const status = jobStatusBadge(job.status);
       append(head, heading, status);
       card.appendChild(head);
       if (job.finished_at) {
@@ -571,12 +571,31 @@
       const counters = job.counters || {};
       const details = el("dl", null, "job-counters");
       for (const [label, count] of [["Targets", counters.targets], ["Processed", counters.processed], ["Skipped", counters.skipped], ["Errors", counters.errors]]) {
-        details.appendChild(append(el("div"), el("dt", label), el("dd", countLabel.format(count || 0))));
+        const counter = el("div", null, label === "Errors" && count > 0 ? "job-counter-errors" : "");
+        details.appendChild(append(counter, el("dt", label), el("dd", countLabel.format(count || 0))));
       }
       card.appendChild(details);
-      if (job.error) card.appendChild(el("p", job.error, "error"));
+      if (job.error || (Array.isArray(job.result?.errors) && job.result.errors.length)) {
+        const diagnostics = el("details", null, "job-error-details");
+        diagnostics.open = state.jobErrorsOpen.has(job.id);
+        diagnostics.appendChild(el("summary", job.status === "failed" ? "Failure details" : "Error details"));
+        const messages = Array.isArray(job.result?.errors) && job.result.errors.length ? job.result.errors : [job.error];
+        for (const message of messages) diagnostics.appendChild(el("p", message, "job-error-message"));
+        for (const candidate of Array.isArray(job.result?.candidates) ? job.result.candidates : []) {
+          if (!candidate || candidate.http_enriched !== false) continue;
+          for (const attempt of Array.isArray(candidate.http_errors) ? candidate.http_errors : []) {
+            if (attempt?.url && attempt?.reason) diagnostics.appendChild(el("p", `${attempt.url}: ${attempt.reason}`, "job-error-message"));
+          }
+        }
+        diagnostics.addEventListener("toggle", () => {
+          if (!diagnostics.isConnected) return;
+          if (diagnostics.open) state.jobErrorsOpen.add(job.id);
+          else state.jobErrorsOpen.delete(job.id);
+        });
+        card.appendChild(diagnostics);
+      }
       if (job.archived) card.appendChild(el("p", "Archived imported record; it is never executed.", "muted"));
-      if (job.chain) card.appendChild(el("p", `Chain ${job.chain.name}: ${job.chain.status} · stage ${job.chain_order}`, "muted"));
+      if (job.chain) card.appendChild(el("p", `Chain ${job.chain.name}: ${jobStatusLabel(job.chain.status)} · stage ${job.chain_order}`, "muted"));
       const actions = el("div", null, "button-row");
       if (job.status === "queued" || job.status === "running") {
         const cancel = el("button", "Cancel", "link");
@@ -609,6 +628,16 @@
     if (status === "partial" || status === "queued" || status === "running" || status === "pending_review") return "warn";
     if (status === "failed" || status === "cancelled" || status === "interrupted") return "bad";
     return "";
+  }
+
+  function jobStatusLabel(status) {
+    return { succeeded: "Completed", partial: "Completed", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted", queued: "Queued", running: "Running" }[status] || status;
+  }
+
+  function jobStatusBadge(status) {
+    const badge = el("span", jobStatusLabel(status), `badge ${status === "partial" ? "ok" : statusClass(status)}`);
+    if (status === "partial") badge.title = "Execution completed. Some checks reported errors; see the Errors counter and details in Job history.";
+    return badge;
   }
 
   function renderMetric(label, count, tone) {
@@ -669,14 +698,14 @@
     metrics.replaceChildren(...dashboardMetrics.map(([label, key]) => renderMetric(label, data[key] ?? 0, key)));
     renderAssetChart(data);
     if (state.dashboard.data_status === "partial") {
-      metrics.appendChild(el("p", "Some jobs completed partially. Review source errors below.", "warn-text"));
+      metrics.appendChild(el("p", "Some checks did not return data. Review error details in Job history.", "warn-text"));
     }
 
     const jobsNode = $("#dashboard-jobs");
     clear(jobsNode);
     jobsNode.appendChild(table(["Task", "Status", "Finished"], state.dashboard.jobs || [], (job, column) => {
       if (column === "Task") return job.task_type;
-      if (column === "Status") return job.status;
+      if (column === "Status") return jobStatusBadge(job.status);
       return job.finished_at || job.created_at;
     }));
 

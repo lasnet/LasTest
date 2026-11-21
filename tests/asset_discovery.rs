@@ -12,6 +12,110 @@ use support::{
     HttpResponse, TestEnv,
 };
 
+#[tokio::test]
+async fn absent_ptr_records_are_empty_results_not_task_errors() {
+    for response_code in [0, 3] {
+        let env = TestEnv::new();
+        let mut ctx = task_context(
+            &env,
+            Scope::new(scope_rules(&[("ip", "203.0.113.88")])).unwrap(),
+            &format!("ptr-empty-{response_code}"),
+        );
+        let dns = spawn_dns_response_server(move |_, _| (response_code, Vec::new())).await;
+        ctx.config.dns_server = Some(dns.addr.to_string());
+        let outcome = dns_tasks::run_reverse_ip(
+            &make_job(
+                "reverse.ip",
+                json!({"ips":["203.0.113.88"],"sources":["ptr"]}),
+            ),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.status, JobStatus::Succeeded);
+        assert_eq!(outcome.counters.errors, 0);
+        assert_eq!(outcome.counters.processed, 1);
+        assert_eq!(outcome.result["partial"], false);
+        assert_eq!(outcome.result["providers"][0]["status"], "empty");
+        assert_eq!(outcome.result["ips"][0]["status"], "empty");
+        assert!(outcome.error.is_none());
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&outcome.artifacts[0].content).unwrap();
+        assert_eq!(artifact["providers"][0]["reason"], "no PTR records");
+        assert!(!artifact.to_string().contains("Query {"));
+    }
+}
+
+#[tokio::test]
+async fn ptr_server_failure_remains_a_real_check_error() {
+    let env = TestEnv::new();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("ip", "203.0.113.88")])).unwrap(),
+        "ptr-servfail",
+    );
+    let dns = spawn_dns_response_server(|_, _| (2, Vec::new())).await;
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    ctx.config.http_timeout_seconds = 1;
+    let outcome = dns_tasks::run_reverse_ip(
+        &make_job(
+            "reverse.ip",
+            json!({"ips":["203.0.113.88"],"sources":["ptr"]}),
+        ),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.status, JobStatus::Partial);
+    assert_eq!(outcome.counters.errors, 1);
+    assert_eq!(outcome.result["providers"][0]["status"], "unavailable");
+    assert!(!outcome.error.as_deref().unwrap().contains("Query {"));
+    assert_ne!(outcome.result["providers"][0]["reason"], "no PTR records");
+}
+
+#[tokio::test]
+async fn absent_ptr_does_not_mark_passive_provider_results_unavailable() {
+    for http_status in [200, 404] {
+        let env = TestEnv::new();
+        let mut ctx = task_context(
+            &env,
+            Scope::new(scope_rules(&[("ip", "203.0.113.88")])).unwrap(),
+            &format!("ptr-provider-{http_status}"),
+        );
+        let dns = spawn_dns_response_server(|_, _| (3, Vec::new())).await;
+        let provider = spawn_http_server(move |_| {
+            HttpResponse::new(http_status, "{\"hostnames\":[],\"ports\":[443]}")
+                .header("Content-Type", "application/json")
+        })
+        .await;
+        ctx.config.dns_server = Some(dns.addr.to_string());
+        ctx.config.shodan_internetdb_url = format!("http://{}", provider.addr);
+        let outcome = dns_tasks::run_reverse_ip(
+            &make_job(
+                "reverse.ip",
+                json!({"ips":["203.0.113.88"],"sources":["ptr","shodan_internetdb"]}),
+            ),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.status, JobStatus::Succeeded);
+        assert_eq!(outcome.counters.errors, 0);
+        assert_eq!(
+            outcome.result["ips"][0]["status"],
+            if http_status == 200 { "ok" } else { "empty" }
+        );
+        assert_eq!(
+            outcome
+                .observations
+                .iter()
+                .filter(|row| row.kind == "provider")
+                .count(),
+            usize::from(http_status == 200)
+        );
+    }
+}
+
 #[test]
 fn shodan_adapter_uses_only_hostnames_and_normalizes_names() {
     let parsed = shodan::parse(

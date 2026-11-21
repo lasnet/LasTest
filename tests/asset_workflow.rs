@@ -444,9 +444,9 @@ async fn ip_only_discovery_enriches_and_classifies_original_assets_without_candi
             .unwrap();
     }
     let chain = env.db.chain_run_json(run).unwrap().unwrap();
-    assert!(
-        matches!(chain["status"].as_str(), Some("succeeded" | "partial")),
-        "{chain}"
+    assert_eq!(
+        chain["status"], "succeeded",
+        "absent PTR is not an error: {chain}"
     );
     let detail = env.db.asset_detail(&project.id, &id).unwrap().unwrap();
     assert_eq!(

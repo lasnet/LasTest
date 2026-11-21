@@ -79,6 +79,60 @@ fn host_and_http(host: &str, url: &str, product: &str) -> TaskOutcome {
 }
 
 #[tokio::test]
+async fn failed_http_enrichment_keeps_attempt_details_in_the_summary_artifact() {
+    let env = TestEnv::new();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("exact", "localhost")])).unwrap(),
+        "http-failure-details",
+    );
+    let dns = spawn_dns_response_server(|_, kind| {
+        if kind == 1 {
+            (0, vec![vec![127, 0, 0, 1]])
+        } else {
+            (3, Vec::new())
+        }
+    })
+    .await;
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let url = format!("http://localhost:{port}/unavailable");
+    publish(&ctx, host_and_http("localhost", &url, "nginx"));
+    let asset = env
+        .db
+        .host_asset_by_canonical(&ctx.project_id, "localhost")
+        .unwrap()
+        .unwrap();
+    let outcome = asset_enrich::run(
+        &make_job(
+            "assets.enrich",
+            json!({"asset_ids":[asset["id"]],"http_enrichment":true}),
+        ),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.status, JobStatus::Partial);
+    assert_eq!(outcome.counters.errors, 1);
+    assert_eq!(outcome.result["candidates"][0]["http_enriched"], false);
+    assert_eq!(
+        outcome.result["candidates"][0]["http_errors"][0]["url"],
+        url
+    );
+    assert!(outcome.result["candidates"][0]["http_errors"][0]["reason"]
+        .as_str()
+        .is_some_and(|reason| !reason.is_empty()));
+    let artifact: serde_json::Value =
+        serde_json::from_slice(&outcome.artifacts[0].content).unwrap();
+    assert_eq!(
+        artifact["candidates"][0]["http_errors"],
+        outcome.result["candidates"][0]["http_errors"]
+    );
+}
+
+#[tokio::test]
 async fn existing_host_assets_retain_http_and_explicit_selection_never_falls_back() {
     let env = TestEnv::new();
     let scope = Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap();
