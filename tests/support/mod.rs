@@ -209,6 +209,7 @@ pub fn task_context(env: &TestEnv, scope: Scope, job_id: &str) -> TaskContext {
         .replace_scope(&project.id, Some(1), &scope, "task fixture", "admin", true)
         .unwrap();
     TaskContext {
+        asset_inputs: None,
         db: env.db.clone(),
         config: env.config.clone(),
         project_id: project.id,

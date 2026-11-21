@@ -123,6 +123,21 @@ Origin: https://lastest.example.internal
 
 ## Запуск задачи
 
+Web UI использует ID из Assets вместо ручных целей:
+
+```json
+{"task_type":"http.crawl","asset_ids":["ast_..."],"params":{"max_pages":100},"idempotency_key":"crawl-1"}
+```
+
+`asset_ids` — непустой список ID строк инвентаря текущего проекта. Сервер выводит IP/домены/URL из выбранных Assets и фиксирует снимок в служебном `_asset_input` параметров задания; прислать это поле с клиента нельзя. Вместе с `asset_ids` запрещены ручные `targets/domains/domain/ips/seeds/base_urls` и вложенные `asset_ids/candidate_ids` в `params`. Чужие, удалённые и пустые выборки отклоняются, без подстановки истории или Scope. `http.probe` получает все сохранённые URL только выбранных хостов и режим `url`; если URL нет, требуется Web Crawling. `http.crawl` и `paths.discover` начинают с HTTP/HTTPS корней выбранных хостов/IP. `urls.passive` требует DNS Assets.
+
+Перед работой выбранные хосты проверяются по текущему и исходному Scope; выбранный Asset под разрешённым исходным DNS name допускается с приоритетом исключений. Для IP-проверок свежие A/AAAA должны пересекаться со снимком IP выбранного Asset. Это разрешение действует только для задачи и не меняет Scope. Обход и редиректы ограничены выбранными хостами. Изменение Scope, удаление Asset и отмена учитываются перед дальнейшими запросами.
+
+- `GET /projects/{id}/assets/targets`: полный каталог хостов/IP для выбора, включая `urls`, `confidence`, `interest`; `next` — `scope_empty`, `approve_scope`, `enumerate_subdomains`, `import_scope` или `ready`, плюс `scope_version`, `import_count`, `import_error`. Сеть не используется.
+- `POST /projects/{id}/assets/import-scope` с `{"scope_version":2}`: подтверждённый атомарный импорт разрешённых IP и адресов Network в Assets. Требует analyst и утверждённой текущей версии Scope без разрешённых DNS name. Исключения/политика сети применяются; слишком большая сеть (включая IPv6) отклоняется до раскрытия. Лимит `max_queue_targets`; сеть импортируется целиком либо не импортируется. Повтор не создаёт дубликатов, ответ `{"added":N}`. Scope не меняется.
+
+Низкоуровневый API/CLI с явными целями сохраняется:
+
 ```http
 POST /api/projects/prj_.../jobs
 Content-Type: application/json
@@ -140,7 +155,7 @@ Idempotency-Key: optional
 - цель вне утверждённого scope, URL с неоднозначностью, неразрешённый IP — `400 invalid_target`;
 - недоступный Nmap-адаптер — `400` с явным сообщением каталога; остальные задачи работают.
 
-Для `tcp.connect`, `nmap.profile`, `reverse.ip` нужны явно разрешённые IP/CIDR. HTTP к разрешённому DNS-имени привязывается к проверенному IP с сохранением `Host`/SNI; редиректы проверяются отдельно; повторное разрешение имени после проверки не выполняется.
+Для `tcp.connect`, `nmap.profile`, `reverse.ip` с ручными целями нужны явно разрешённые IP/CIDR. HTTP к разрешённому DNS-имени привязывается к проверенному IP с сохранением `Host`/SNI; редиректы проверяются отдельно; повторное разрешение имени после проверки не выполняется.
 
 `dns.wordlist` использует dnsmap: `{"domain":"example.com","wordlist":"default","concurrency":8}`. Доступны 4, 8 или 16 параллельных исполнителей, по умолчанию 8. `default` содержит 989 слов; `words` остаётся совместимым API-входом и переопределяет содержимое списка. Лимит `max_wordlist_entries` к этой задаче не применяется. Неизвестные списки, неверная параллельность и некорректные DNS-метки отклоняются до постановки в очередь. Формат результата v1 сохраняет `domain`, `found`, `wildcard_addresses`, `searched` и дополняется `engine`, `wordlist`, `concurrency`. В Assets записываются только разрешённые имена с A/AAAA и их IP; JSON-артефакт доступен обычными маршрутами задания. Лимит 50 доменов снят для CT, Subfinder и из каталога цепочки.
 
@@ -165,6 +180,10 @@ Idempotency-Key: optional
 Создаются связанные стадии `subdomains.discover → dns.records → http.probe → urls.passive → http.crawl → web.checks`. Каждая стадия ждёт терминального состояния предыдущей. Продолжение после `partial` разрешено; после `failed/cancelled/interrupted` зависимая стадия пропускается с причиной.
 
 ### Пресет Asset Discovery
+
+Интерфейс передаёт `{"preset":"asset_discovery","asset_ids":["ast_..."],"sources":["ptr","shodan_internetdb"],"http_enrichment":false}`. Сервер получает IP из выбранных Assets; стадии enrich/classify обрабатывают исходные Assets, включая IP-only, и committed-кандидатов текущей цепочки. Если PTR/провайдер не нашёл кандидатов, исходные Assets всё равно обогащаются и классифицируются. Одновременная передача `ips` и `asset_ids` запрещена.
+
+Совместимый низкоуровневый вариант:
 
 ```json
 {"preset":"asset_discovery","ips":["203.0.113.10"],"sources":["ptr","shodan_internetdb"],"http_enrichment":false,"idempotency_key":"disc-1"}

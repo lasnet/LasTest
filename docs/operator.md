@@ -81,10 +81,10 @@ lastest --data-dir /data restore --from ./backup-2026-11-15 --force
 
 ## Asset Discovery
 
-1. Утвердите Scope с явными IP-адресами (CIDR в UI не разворачивается в список адресов; backend проверяет IP по утверждённому диапазону).
-2. На странице Scans в карточке Asset Discovery выберите источники в Settings (PTR, Shodan InternetDB, Censys) и при необходимости включите **Active HTTP enrichment**.
-3. Нажмите **Start Asset Discovery**: создаётся одна цепочка `reverse.ip` → `assets.enrich` → `assets.classify`; три независимых параллельных задания не ставятся.
-4. В Assets откройте Discovery candidates: фильтры по источнику, DNS-статусу, совпадению IP, текущему Scope, confidence и interest. Карточка показывает историю свидетельств, причину `not_permitted`/`no_addresses` и сохранённый enrichment.
+1. Создайте Project, заполните и утвердите Scope. При наличии DNS name сначала наполните Assets через Subdomain Enumeration; в IP/Network-проекте подтвердите импорт IP в Assets. Слишком большие сети отклоняются до импорта. См. [модель работы](product-workflow.md).
+2. На странице Scans откройте Settings (шестерёнку) Asset Discovery, выберите источники (PTR, Shodan InternetDB, Censys) и при необходимости включите **Active HTTP enrichment**. Все настройки находятся в диалоге, карточка только выбирает модуль.
+3. Выберите Asset Discovery и нажмите общую кнопку **Start scanning**: создаётся одна цепочка `reverse.ip` → `assets.enrich` → `assets.classify`; три независимых параллельных задания не ставятся.
+4. В Assets кнопка Details открывает панель справа с найденными DNS/HTTP, технологиями, портами, сетью и классификацией; повторный запуск обновляет существующий актив. Для внешних имён откройте Discovery candidates: фильтры по источнику, DNS-статусу, совпадению IP, текущему Scope, confidence и interest. Карточка показывает историю свидетельств, причину `not_permitted`/`no_addresses` и сохранённый enrichment.
 5. **Add to Scope** только переносит имя в редактор Scope. Сохранение и утверждение остаются явным действием с проверкой версии; клик не запускает задачи и не утверждает Scope.
 
 Интеграции Censys принадлежат всей установке. `censys_pat` (env `LASTEST_CENSYS_PAT`) включает Platform v3; без PAT полная пара `censys_api_id`/`censys_api_secret` использует legacy v2. Неполная пара — ошибка конфигурации интеграции. Ключи не принимаются в параметрах задач, проектах, цепочках и не возвращаются API. Изменения конфигурации применяются перезапуском API и worker; hot reload не поддерживается. Открытие каталога, Assets или отчёта не выполняет сетевых запросов.

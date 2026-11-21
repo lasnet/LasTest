@@ -25,6 +25,8 @@ pub struct SubmitBody {
     #[serde(default = "empty_object")]
     pub params: Value,
     #[serde(default)]
+    pub asset_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub idempotency_key: Option<String>,
 }
 
@@ -43,6 +45,8 @@ pub struct ChainBody {
     pub targets: Vec<String>,
     #[serde(default)]
     pub ips: Vec<String>,
+    #[serde(default)]
+    pub asset_ids: Option<Vec<String>>,
     #[serde(default)]
     pub sources: Option<Vec<String>>,
     #[serde(default)]
@@ -168,12 +172,18 @@ pub async fn submit_job(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<SubmitBody>,
+    Json(mut body): Json<SubmitBody>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let session = authenticate(&state, &headers)?;
     require(&session, Role::Analyst)?;
     validate_origin(&Method::POST, &headers, Some(&session))?;
     let project = resolve_project(&state, &id)?;
+    if body.params.get(tasks::asset_input::INPUT_KEY).is_some() {
+        return Err(ApiError::bad_request(
+            "invalid_params",
+            "Asset input metadata is server-owned",
+        ));
+    }
     if body.task_type == registry::chain_task_type() {
         let chain = submit_chain_internal(
             &state,
@@ -197,10 +207,26 @@ pub async fn submit_job(
             "the current scope revision must be approved before jobs can be submitted",
         ));
     }
-    tasks::validate_submission(&body.task_type, &body.params, &state.config)
+    if let Some(ids) = &body.asset_ids {
+        body.params = selected_params(
+            &state,
+            &project.id,
+            &body.task_type,
+            &body.params,
+            ids,
+            &scope.scope,
+        )?;
+    }
+    let mut public_params = body.params.clone();
+    if let Some(params) = public_params.as_object_mut() {
+        params.remove(tasks::asset_input::INPUT_KEY);
+    }
+    tasks::validate_submission(&body.task_type, &public_params, &state.config)
         .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
-    tasks::validate_scope_targets(&body.task_type, &body.params, &scope.scope, &state.config)
-        .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+    if body.asset_ids.is_none() {
+        tasks::validate_scope_targets(&body.task_type, &body.params, &scope.scope, &state.config)
+            .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+    }
     if matches!(body.task_type.as_str(), "assets.enrich" | "assets.classify") {
         for id in tasks::string_list(&body.params, "candidate_ids").map_err(ApiError::internal)? {
             if state
@@ -270,6 +296,42 @@ fn map_enqueue_error(err: EnqueueError) -> ApiError {
     }
 }
 
+fn selected_params(
+    state: &AppState,
+    project: &str,
+    task: &str,
+    params: &Value,
+    ids: &[String],
+    scope: &crate::scope::Scope,
+) -> Result<Value, ApiError> {
+    let inputs = state
+        .db
+        .select_asset_inputs(project, ids, state.config.max_queue_targets)
+        .map_err(|error| ApiError::bad_request("invalid_target", error.to_string()))?;
+    let expanded = tasks::asset_input::selection_scope(scope, &inputs)
+        .map_err(|error| ApiError::bad_request("invalid_target", error.to_string()))?;
+    let mut params = tasks::asset_input::materialize(task, params, &inputs)
+        .map_err(|error| ApiError::bad_request("invalid_params", error.to_string()))?;
+    if matches!(task, "assets.enrich" | "assets.classify") && params.get("limit").is_none() {
+        params["limit"] = json!(state
+            .config
+            .max_discovery_candidates
+            .min(state.config.max_queue_targets));
+    }
+    for key in ["ips", "targets", "domains", "seeds", "base_urls"] {
+        if let Some(values) = params.get(key).and_then(Value::as_array) {
+            tasks::ensure_target_limit(values.len(), &state.config)
+                .map_err(|error| ApiError::bad_request("invalid_params", error.to_string()))?;
+        }
+    }
+    tasks::validate_submission(task, &params, &state.config)
+        .map_err(|error| ApiError::bad_request("invalid_params", error.to_string()))?;
+    tasks::validate_scope_targets(task, &params, &expanded, &state.config)
+        .map_err(|error| ApiError::bad_request("invalid_target", error.to_string()))?;
+    params[tasks::asset_input::INPUT_KEY] = json!(inputs);
+    Ok(params)
+}
+
 pub async fn get_job(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -325,6 +387,7 @@ pub async fn submit_chain(
         "sources": body.sources,
         "http_enrichment": body.http_enrichment,
         "preset": body.preset,
+        "asset_ids": body.asset_ids,
     });
     let value = submit_chain_internal(
         &state,
@@ -401,7 +464,14 @@ async fn submit_chain_internal(
             .transpose()
             .map_err(|_| ApiError::bad_request("invalid_params", "ips must be strings"))?
             .unwrap_or_default();
-        if ips.is_empty() {
+        let selected_ids: Option<Vec<String>> = params
+            .get("asset_ids")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| ApiError::bad_request("invalid_params", "asset_ids must be strings"))?;
+        if selected_ids.is_none() && ips.is_empty() {
             ips = scope
                 .scope
                 .rules
@@ -416,30 +486,68 @@ async fn submit_chain_internal(
                 .collect();
         }
         ips = tasks::dedup_strings(&ips);
-        if ips.is_empty() {
+        if selected_ids.is_none() && ips.is_empty() {
             return Err(ApiError::bad_request(
                 "invalid_target",
                 "Asset Discovery needs explicit IP address records in the approved Scope",
             ));
         }
-        let reverse_params = json!({"ips": ips, "sources": sources});
-        tasks::validate_submission("reverse.ip", &reverse_params, &state.config)
-            .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
-        tasks::validate_scope_targets("reverse.ip", &reverse_params, &scope.scope, &state.config)
-            .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+        let reverse_params = if let Some(ids) = &selected_ids {
+            if !ips.is_empty() {
+                return Err(ApiError::bad_request(
+                    "invalid_params",
+                    "use asset_ids without ips",
+                ));
+            }
+            selected_params(
+                state,
+                &project.id,
+                "reverse.ip",
+                &json!({"sources":sources}),
+                ids,
+                &scope.scope,
+            )?
+        } else {
+            let params = json!({"ips": ips, "sources": sources});
+            tasks::validate_submission("reverse.ip", &params, &state.config)
+                .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
+            tasks::validate_scope_targets("reverse.ip", &params, &scope.scope, &state.config)
+                .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
+            params
+        };
         let http_enrichment = params
             .get("http_enrichment")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         run_name = name.unwrap_or("Asset Discovery").to_string();
+        let enrich_params = if let Some(ids) = &selected_ids {
+            selected_params(
+                state,
+                &project.id,
+                "assets.enrich",
+                &json!({"http_enrichment": http_enrichment}),
+                ids,
+                &scope.scope,
+            )?
+        } else {
+            json!({"http_enrichment": http_enrichment})
+        };
+        let classify_params = if let Some(ids) = &selected_ids {
+            selected_params(
+                state,
+                &project.id,
+                "assets.classify",
+                &json!({}),
+                ids,
+                &scope.scope,
+            )?
+        } else {
+            json!({})
+        };
         stage_inputs = vec![
             ("reverse.ip".to_string(), reverse_params, Vec::new()),
-            (
-                "assets.enrich".to_string(),
-                json!({"http_enrichment": http_enrichment}),
-                vec![1],
-            ),
-            ("assets.classify".to_string(), json!({}), vec![1, 2]),
+            ("assets.enrich".to_string(), enrich_params, vec![1]),
+            ("assets.classify".to_string(), classify_params, vec![1, 2]),
         ];
     } else {
         let domains: Vec<String> = params

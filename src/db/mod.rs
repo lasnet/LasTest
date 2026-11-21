@@ -2,6 +2,7 @@
 //! bounded busy timeout. Migrations are versioned and applied under an
 //! immediate transaction so API and worker can start concurrently.
 
+pub mod asset_input;
 pub mod assets;
 pub mod discovery;
 pub mod import;

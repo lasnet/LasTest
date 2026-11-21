@@ -28,6 +28,7 @@ docker compose exec api lastest admin setup-code
 
 ## Документация
 
+- [Модель работы Project → Scope → Assets → модули](docs/product-workflow.md)
 - [Контракт API](docs/api.md)
 - [Импорт проектов 1.x](docs/migration.md)
 - [Резервная копия, восстановление и откат](docs/rollback.md)

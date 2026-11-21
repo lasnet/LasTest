@@ -21,7 +21,9 @@ pub(crate) fn allows_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<
 /// discovery helper. This never grants HTTP/TCP permission.
 /// Returns the allowed DNS domain that permits verification of `host`.
 pub(crate) fn candidate_dns_domain(ctx: &TaskContext, host: &str) -> Result<Option<String>> {
-    if ctx.allows_host_now(host) && !ctx.scope.snapshot.exclusion_matches_host(host) {
+    // Selected Assets may have a task-local connection grant under an exact
+    // DNS seed. DNS resolution still needs that seed, not the derived hostname.
+    if ctx.scope.snapshot.allows_host(host) && ctx.current_scope()?.allows_host(host) {
         return Ok(Some(host.to_string()));
     }
     for rule in &ctx.scope.snapshot.rules {

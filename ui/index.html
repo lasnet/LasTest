@@ -430,6 +430,7 @@
       <div id="scan-dialog-content"></div>
       <p id="scan-settings-error" class="error" role="alert"></p>
       <div class="button-row">
+        <button id="cancel-scan-settings" type="button">Cancel</button>
         <button id="apply-scan-settings" type="submit" class="primary">Apply settings</button>
       </div>
     </form>
@@ -445,7 +446,22 @@
       <button id="candidate-add-scope" type="button" class="secondary">Add to Scope</button>
     </div>
   </dialog>
-  <dialog id="asset-detail-dialog" aria-labelledby="asset-detail-title">
+  <dialog id="asset-readiness-dialog" aria-labelledby="asset-readiness-title">
+    <h2 id="asset-readiness-title">Prepare project Assets</h2>
+    <p id="asset-readiness-description"></p>
+    <p id="asset-readiness-error" class="error" role="alert"></p>
+    <div class="button-row"><button id="asset-readiness-cancel" type="button">Cancel</button><button id="asset-readiness-action" type="button" class="primary"></button></div>
+  </dialog>
+  <dialog id="asset-target-dialog" aria-labelledby="asset-target-title">
+    <h2 id="asset-target-title">Select hosts</h2>
+    <p id="asset-target-hint" class="muted"></p>
+    <div class="field"><label for="asset-target-search">Search DNS names or IP addresses</label><input id="asset-target-search" type="search" autocomplete="off"></div>
+    <div class="button-row target-picker-tools"><button id="asset-target-all" type="button">Select all matching</button><button id="asset-target-none" type="button">Clear selection</button><span id="asset-target-count" role="status"></span></div>
+    <div id="asset-target-rows"></div>
+    <nav class="assets-pagination" aria-label="Host selection pages"><button id="asset-target-previous" type="button">Previous</button><span id="asset-target-page"></span><button id="asset-target-next" type="button">Next</button></nav>
+    <div class="button-row"><button id="asset-target-cancel" type="button">Cancel</button><button id="asset-target-save" type="button" class="primary">Save hosts</button></div>
+  </dialog>
+  <dialog id="asset-detail-dialog" class="asset-drawer" aria-labelledby="asset-detail-title">
     <div class="scan-dialog-heading">
       <h2 id="asset-detail-title">Asset details</h2>
       <button id="close-asset-detail" type="button" aria-label="Close asset details">×</button>

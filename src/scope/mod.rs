@@ -251,6 +251,12 @@ impl Scope {
             .any(|rule| !rule.exclusion && ip_matches(rule, ip))
     }
 
+    pub fn exclusion_matches_ip(&self, ip: IpAddr) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.exclusion && ip_matches(rule, ip))
+    }
+
     /// Resolution of a permitted DNS name is not itself permission to connect
     /// to arbitrary ports on the resulting address. Hostname HTTP authorization
     /// is separate from explicit IP/CIDR authorization.

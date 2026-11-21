@@ -158,8 +158,16 @@ pub async fn run_probe(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                     .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
                 outcome.observe(
                     "http.probe",
-                    "host",
-                    "host",
+                    if crate::scope::canonical_ip(&host).is_ok() {
+                        "ip"
+                    } else {
+                        "host"
+                    },
+                    if crate::scope::canonical_ip(&host).is_ok() {
+                        "ip"
+                    } else {
+                        "host"
+                    },
                     &host,
                     json!({"url": fetch.final_url, "verified_ip": fetch.remote_ip.to_string()}),
                     "allowed",
@@ -261,11 +269,9 @@ pub async fn run_crawl(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                 continue;
             }
         };
-        if let Some(host) = parsed.host_str() {
-            if !ctx.allows_host_now(host) {
-                outcome.skipped();
-                continue;
-            }
+        if !ctx.authorize_url_now(&parsed) {
+            outcome.skipped();
+            continue;
         }
         match prober
             .get_with_authorizer(parsed.as_str(), &policy, |candidate| {
@@ -300,11 +306,10 @@ pub async fn run_crawl(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                             continue;
                         }
                         let key = canonical_url_key(next.as_str())?;
-                        let next_host = next.host_str().unwrap_or_default().to_string();
                         if !seen.insert(key) {
                             continue;
                         }
-                        let allowed = ctx.allows_host_now(&next_host);
+                        let allowed = ctx.authorize_url_now(&next);
                         outcome.observe(
                             "http.crawl",
                             "url",
@@ -416,11 +421,9 @@ pub async fn run_paths(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                     continue;
                 }
             };
-            if let Some(host) = url.host_str() {
-                if !ctx.allows_host_now(host) {
-                    outcome.skipped();
-                    continue;
-                }
+            if !ctx.authorize_url_now(&url) {
+                outcome.skipped();
+                continue;
             }
             match prober
                 .get_with_authorizer(url.as_str(), &policy, |candidate| {

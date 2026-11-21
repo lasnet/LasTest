@@ -72,6 +72,7 @@ pub async fn run_tcp(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         }
         for port in &ports {
             ctx.ensure_active()?;
+            ctx.authorize_ip(ip)?;
             let probe = if let Some(proxy) = &profile {
                 run_proxy_probe(proxy, ip, *port, ctx.config.http_timeout_seconds).await
             } else {

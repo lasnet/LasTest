@@ -531,6 +531,11 @@ impl Db {
                     }),
             );
         }
+        asset["addresses"] = if kind == "ip" {
+            json!([canonical])
+        } else {
+            json!(linked_ips)
+        };
         let mut dns = Vec::new();
         let mut http = Vec::new();
         let mut services = Vec::new();
@@ -578,7 +583,7 @@ impl Db {
             "country": passive.get("country").cloned().unwrap_or(Value::Null),
         });
         asset["candidate"] = candidate.unwrap_or(Value::Null);
-        asset["enrichment"] = if kind == "host" {
+        asset["enrichment"] = if kind == "host" || kind == "ip" {
             self.latest_enrichment(project_id, &canonical)?
                 .unwrap_or(Value::Null)
         } else {

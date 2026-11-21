@@ -376,7 +376,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                 .db
                 .asset_detail(&ctx.project_id, id)?
                 .ok_or_else(|| anyhow::anyhow!("asset not found in this project"))?;
-            if asset["kind"] == "host" {
+            if asset["kind"] == "host" || asset["kind"] == "ip" {
                 assets.push(json!({
                     "id": asset["id"],
                     "kind": asset["kind"],
@@ -479,8 +479,21 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     hosts.extend(asset_by_host.keys().cloned());
     let mut outcome = TaskOutcome::new();
     outcome.target(hosts.len());
+    if hosts.len() > limit {
+        outcome.counters.skipped += (hosts.len() - limit) as u64;
+        outcome.error("additional candidates exceed the classification limit; original selected Assets take priority");
+    }
+    let ordered: Vec<_> = asset_by_host
+        .keys()
+        .cloned()
+        .chain(
+            hosts
+                .into_iter()
+                .filter(|host| !asset_by_host.contains_key(host)),
+        )
+        .collect();
     let mut summaries = Vec::new();
-    for host in hosts.into_iter().take(limit) {
+    for host in ordered.into_iter().take(limit) {
         ctx.ensure_active()?;
         let candidate = candidate_by_host.get(&host);
         let asset = asset_by_host.get(&host);

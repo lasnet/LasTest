@@ -127,6 +127,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         .max(1);
     let chain_mode = !ctx.input_jobs.is_empty();
     let explicit = !params.candidate_ids.is_empty() || !params.asset_ids.is_empty();
+    let mut ip_assets = Vec::new();
     let mut candidates = ctx
         .db
         .candidates_by_ids(&ctx.project_id, &params.candidate_ids)?;
@@ -144,7 +145,12 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         } else if asset["kind"] == "host" {
             candidates.push(json!({"hostname": asset["canonical_value"], "asset_id": id,
                 "dns_status": "not_checked", "addresses": [], "ip_match": "unknown"}));
+        } else if asset["kind"] == "ip" {
+            ip_assets.push(asset);
         }
+    }
+    if explicit && chain_mode {
+        candidates.extend(ctx.chain_input_candidates()?);
     }
     if !explicit {
         if chain_mode {
@@ -163,8 +169,11 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     }
     let mut seen = BTreeSet::new();
     candidates.retain(|candidate| candidate_host(candidate).is_some_and(|host| seen.insert(host)));
-    candidates.truncate(limit);
-    if candidates.is_empty() {
+    let omitted = candidates
+        .len()
+        .saturating_sub(limit.saturating_sub(ip_assets.len()));
+    candidates.truncate(limit.saturating_sub(ip_assets.len()));
+    if candidates.is_empty() && ip_assets.is_empty() {
         let reason = if chain_mode {
             "no committed candidate input from earlier stages"
         } else {
@@ -196,7 +205,11 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     };
     let policy = ctx.config.network_policy();
     let mut outcome = TaskOutcome::new();
-    outcome.target(candidates.len());
+    outcome.target(candidates.len() + ip_assets.len());
+    if omitted > 0 {
+        outcome.counters.skipped += omitted as u64;
+        outcome.error(format!("{omitted} additional candidates exceed the enrichment limit; original selected Assets take priority"));
+    }
     let mut summaries = Vec::new();
     let mut http_count = 0usize;
     let mut not_permitted = 0usize;
@@ -539,6 +552,66 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
             "ip_match": ip_match,
             "http_enriched": before_http < http_count,
         }));
+        outcome.processed();
+    }
+    for asset in ip_assets {
+        ctx.ensure_active()?;
+        let ip = asset["canonical_value"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid IP Asset"))?;
+        ctx.authorize_ip(crate::scope::canonical_ip(ip)?)?;
+        let observations = ctx.observations_for_host(ip)?;
+        let passive = provider_passive(&observations);
+        let mut http = saved_http(&observations);
+        let mut errors = Vec::new();
+        if let Some(prober) = &prober {
+            let authority = if ip.contains(':') {
+                format!("[{ip}]")
+            } else {
+                ip.to_string()
+            };
+            for scheme in ["https", "http"] {
+                let url = format!("{scheme}://{authority}/");
+                ctx.ensure_active()?;
+                match prober
+                    .get_with_authorizer(&url, &policy, |url| ctx.authorize_url_now(url))
+                    .await
+                {
+                    Ok(fetch) => {
+                        let data = json!({"url":fetch.final_url,"status_code":fetch.status,"title":extract_title(&fetch.body),"server":fetch.header("server").unwrap_or(""),"verified_ip":fetch.remote_ip.to_string(),"technologies":detect_technologies(&fetch)});
+                        outcome.observe(
+                            "assets.enrich",
+                            "http",
+                            "url",
+                            &fetch.final_url,
+                            data.clone(),
+                            "allowed",
+                        );
+                        http.push(data);
+                        http_count += 1;
+                        break;
+                    }
+                    Err(error) => errors.push(json!({"url":url,"reason":error.to_string()})),
+                }
+            }
+            if http.is_empty() {
+                outcome.error(format!("HTTP enrichment failed for {ip}"));
+            }
+        }
+        let mut tech_input = observations.clone();
+        tech_input.extend(http.iter().cloned());
+        let data = json!({"format_version":"1","host":ip,"checked_at":crate::domain::now_rfc3339(),
+            "dns":{"status":"not_applicable","addresses":[ip],"records":{},"scope_status":"allowed"},
+            "http":http,"http_errors":errors,"technologies":crate::tasks::tech_catalog::from_stored(&tech_input),
+            "ports":{"confirmed":confirmed_ports(&observations),"passive_reported":passive.get("ports").cloned().unwrap_or_else(||json!([]))},
+            "network":{"asn":passive.get("asn"),"organization":passive.get("organization"),"country":passive.get("country")}});
+        outcome.enrichment(NewEnrichment {
+            host: ip.to_string(),
+            candidate_id: None,
+            asset_id: asset["id"].as_str().map(str::to_string),
+            data,
+        });
+        summaries.push(json!({"host":ip,"dns_status":"not_applicable"}));
         outcome.processed();
     }
     let has_errors = outcome.counters.errors > 0 || !outcome.errors.is_empty();

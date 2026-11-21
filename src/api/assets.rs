@@ -24,6 +24,81 @@ pub struct InventoryQuery {
     offset: u32,
 }
 
+pub async fn targets(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Viewer)?;
+    let project = resolve_project(&state, &id)?;
+    let scope = state
+        .db
+        .current_scope(&project.id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("project Scope is missing"))?;
+    let items = state
+        .db
+        .asset_input_catalog(&project.id)
+        .map_err(ApiError::internal)?;
+    let has_dns = crate::db::asset_input::scope_has_dns(&scope.scope);
+    let has_rules = scope.scope.rules.iter().any(|rule| !rule.exclusion);
+    let next = if !has_rules {
+        "scope_empty"
+    } else if scope.status != crate::domain::ScopeStatus::Approved {
+        "approve_scope"
+    } else if !items.is_empty() {
+        "ready"
+    } else if has_dns {
+        "enumerate_subdomains"
+    } else {
+        "import_scope"
+    };
+    let mut count = None;
+    let mut import_error = None;
+    if next == "import_scope" {
+        match crate::db::asset_input::scope_import_ips(
+            &scope.scope,
+            &state.config.network_policy(),
+            state.config.max_queue_targets,
+        ) {
+            Ok(ips) => count = Some(ips.len()),
+            Err(error) => import_error = Some(error.to_string()),
+        }
+    }
+    Ok(Json(
+        json!({"items":items,"next":next,"scope_version":scope.version,"import_count":count,"import_error":import_error}),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ImportScopeBody {
+    pub scope_version: i64,
+}
+
+pub async fn import_scope(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ImportScopeBody>,
+) -> ApiResult {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Analyst)?;
+    validate_origin(&Method::POST, &headers, Some(&session))?;
+    let project = resolve_project(&state, &id)?;
+    let added = state
+        .db
+        .import_scope_assets(
+            &project.id,
+            body.scope_version,
+            &state.config.network_policy(),
+            state.config.max_queue_targets,
+            &session.user.username,
+        )
+        .map_err(|error| ApiError::bad_request("asset_import_failed", error.to_string()))?;
+    Ok(Json(json!({"added":added})))
+}
+
 pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

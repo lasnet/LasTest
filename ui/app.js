@@ -23,6 +23,7 @@
     assetDetail: null,
     providers: {},
     discoveryHttpEnrichment: false,
+    targetCatalog: null,
     candidateDetailRequest: 0,
     assetDetailRequest: 0,
     deleteAsset: null,
@@ -340,6 +341,11 @@
     $("#candidates-search").value = "";
     selectedModules.clear();
     scanParams.clear();
+    state.targetCatalog = null;
+    state.discoveryHttpEnrichment = false;
+    targetSelections.clear();
+    settingsTargetIds = new Set();
+    for (const dialog of ["scan-module-dialog", "asset-target-dialog", "asset-readiness-dialog"]) $("#" + dialog).close();
     rememberProject();
     state.project = state.projects.find((item) => item.project.id === id)?.project || null;
     state.dashboard = null;
@@ -918,7 +924,7 @@
     if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
     else if (state.candidatesLoading) node.appendChild(el("p", "Loading candidates…", "empty"));
     else if (!data?.items?.length) {
-      node.appendChild(el("p", "No candidates match these filters yet. Run Asset Discovery from Scans with approved IP addresses in Scope.", "empty"));
+      node.appendChild(el("p", "No candidates match these filters yet. Run Asset Discovery from Scans using this project's Assets.", "empty"));
     } else {
       node.appendChild(table(["Host", "Sources", "DNS", "IP match", "Scope", "Confidence / interest", "Last seen", "Details"], data.items, (row, column) => {
         if (column === "Host") return row.hostname;
@@ -1026,7 +1032,7 @@
     $("#asset-detail-dialog").showModal();
     try {
       const value = await api(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`);
-      if (projectId !== state.projectId) return;
+      if (projectId !== state.projectId || request !== state.assetDetailRequest || !$("#asset-detail-dialog").open) return;
       renderAssetDetail(value.asset);
     } catch (error) {
       if (projectId === state.projectId && request === state.assetDetailRequest) $("#asset-detail-error").textContent = error.message;
@@ -1038,6 +1044,9 @@
     clear(content);
     $("#asset-detail-title").textContent = asset.value || "Asset details";
     content.appendChild(el("p", `${asset.kind} · first seen ${asset.first_seen} · last seen ${asset.last_seen}`, "muted"));
+    const addresses = asset.addresses || asset.enrichment?.data?.dns?.addresses || asset.candidate?.addresses || [];
+    if (addresses.length) content.appendChild(el("p", `IP addresses: ${addresses.join(", ")}`));
+    if (asset.sources?.length) content.appendChild(el("p", `Sources: ${asset.sources.join(", ")}`, "muted"));
     const classification = asset.classification;
     if (classification) {
       content.appendChild(el("h3", "Classification"));
@@ -1049,25 +1058,33 @@
       const hints = classification.surface_hints || [];
       if (hints.length) content.appendChild(el("p", `Surface hints: ${hints.map((hint) => hint.name).join(", ")}`));
     }
-    content.appendChild(el("h3", "Detected technologies"));
     const technologies = asset.technologies || [];
-    if (!technologies.length) content.appendChild(el("p", "No stored technology evidence.", "muted"));
+    if (technologies.length) content.appendChild(el("h3", "Detected technologies"));
     for (const tech of technologies) {
       content.appendChild(el("p", `${tech.name}${tech.versions?.length ? " · " + tech.versions.join(", ") : tech.version ? " · " + tech.version : ""}`));
       const evidence = tech.evidence || [];
       if (Array.isArray(evidence) && evidence.length) content.appendChild(el("ul", null, "details-list")).append(...evidence.map((item) => el("li", `${item.source}: ${item.evidence}`)));
     }
-    content.appendChild(el("h3", "DNS"));
-    content.appendChild(table(["Source", "Type", "Value", "Observed"], asset.dns || [], (row, column) => column === "Source" ? row.source : column === "Type" ? row.data?.record_type || row.kind : column === "Value" ? row.data?.value || row.data?.name || "" : row.observed_at));
-    content.appendChild(el("h3", "HTTP services"));
-    content.appendChild(table(["URL", "Status", "Title", "Server"], asset.http || [], (row, column) => {
+    if ((asset.dns || []).length) content.appendChild(el("h3", "DNS"));
+    if ((asset.dns || []).length) content.appendChild(table(["Source", "Type", "Value", "Observed"], asset.dns || [], (row, column) => column === "Source" ? row.source : column === "Type" ? row.data?.record_type || row.kind : column === "Value" ? row.data?.value || row.data?.name || "" : row.observed_at));
+    if ((asset.http || []).length) content.appendChild(el("h3", "HTTP services"));
+    if ((asset.http || []).length) content.appendChild(table(["URL", "Status", "Title", "Server"], asset.http || [], (row, column) => {
       const data = row.data || {};
       return column === "URL" ? data.url : column === "Status" ? data.status_code : column === "Title" ? data.title : data.server;
     }));
-    content.appendChild(el("h3", "Ports"));
-    content.appendChild(el("p", `Confirmed: ${(asset.ports?.confirmed || []).length} · passive reported: ${(asset.ports?.passive_reported || []).join(", ") || "none"}`));
-    content.appendChild(el("h3", "Network"));
-    content.appendChild(el("p", `Organization: ${asset.network?.organization || "unknown"} · ASN: ${asset.network?.asn || "unknown"} · country: ${asset.network?.country || "unknown"}`));
+    if (asset.ports?.confirmed?.length || asset.ports?.passive_reported?.length || asset.services?.length) {
+      content.appendChild(el("h3", "Ports"));
+      content.appendChild(el("p", `Confirmed: ${(asset.ports?.confirmed || []).length} · passive reported: ${(asset.ports?.passive_reported || []).join(", ") || "none"}`));
+    }
+    if (asset.ports?.confirmed?.length) content.appendChild(table(["IP address", "Port", "State"], asset.ports.confirmed, (row, column) => column === "IP address" ? row.asset : column === "Port" ? row.data?.port : row.data?.state));
+    if (asset.services?.length) content.appendChild(table(["Port", "Service", "Product", "Version"], asset.services, (row, column) => row.data?.[column.toLowerCase()]));
+    if (asset.network?.organization || asset.network?.asn || asset.network?.country) {
+      content.appendChild(el("h3", "Network"));
+      content.appendChild(el("p", `Organization: ${asset.network?.organization || "unknown"} · ASN: ${asset.network?.asn || "unknown"} · country: ${asset.network?.country || "unknown"}`));
+    }
+    if (!classification && !technologies.length && !asset.http?.length && !asset.dns?.length && !asset.services?.length) {
+      content.appendChild(el("p", "No enrichment stored yet. Run Asset Discovery to collect and classify information about this Asset.", "muted"));
+    }
     if (asset.candidate) {
       content.appendChild(el("h3", "Provenance"));
       content.appendChild(el("p", `Candidate ${asset.candidate.hostname} · DNS ${asset.candidate.dns_status} · IP match ${asset.candidate.ip_match} · sources ${(asset.candidate.sources || []).join(", ")}`));
@@ -1403,7 +1420,7 @@
       planned: "Subdomain-only ffuf. Subfinder and dnsmap wordlist discovery are available." },
     { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
       tasks: ["reverse.ip"],
-      description: "Discover IP-related assets using PTR and configured passive reverse-IP providers. Explicit approved IP addresses are required.",
+      description: "Enrich project Assets using their DNS names and IP addresses, passive reverse-IP sources, DNS verification and local classification.",
       planned: "hakrevdns, theHarvester and WhatWeb. ASN and cloud-storage discovery are planned." },
     { id: "crawling", title: "Web Crawling", family: "recon", mode: "Active Recon", tone: "orange",
       tasks: ["urls.passive", "http.crawl", "paths.discover"],
@@ -1415,7 +1432,7 @@
       planned: "httpx integration." },
     { id: "ports", title: "Port Scanning", family: "recon", mode: "Active Recon", tone: "purple",
       tasks: ["tcp.connect", "nmap.profile"],
-      description: "Check explicit approved IP addresses with native TCP connect or the optional fixed unprivileged Nmap service profile. Select the ports in settings. Nmap is available when installed and configured.",
+      description: "Scan IP addresses from selected project Assets with native TCP connect or the optional unprivileged Nmap service profile. Choose a port preset or enter ports separated by commas in settings.",
       planned: "Nmap presets for web ports, the 1,000 most common ports, and OS/service information after discovering open ports." },
     { id: "network-vulnerabilities", title: "Network Vulnerability", family: "vulnerability", mode: "Active checks", tone: "pink", tasks: [],
       description: "Network vulnerability integrations are planned. This card will become selectable when an executable task is available.",
@@ -1430,7 +1447,12 @@
   const scanParams = new Map();
   const submissionKeys = new Map();
   let scanning = false;
-  const discoverySubmissionKeys = new Map();
+  let preparingScans = false;
+  const targetSelections = new Map();
+  let settingsTargetIds = new Set();
+  let targetPickerDraft = new Set();
+  let targetPickerRows = [];
+  let targetPickerOffset = 0;
   let settingsModule = null;
 
   function moduleTasks(module) {
@@ -1450,7 +1472,10 @@
   function renderScanModules() {
     for (const module of scanModules) {
       const available = moduleTasks(module).filter((task) => task.available);
-      if (available.length && !scanChoices.has(module.id)) scanChoices.set(module.id, new Set([available[0].name]));
+      if (available.length && !scanChoices.has(module.id)) {
+        const preferred = module.id === "crawling" ? "http.crawl" : module.id === "ports" ? "tcp.connect" : available[0].name;
+        scanChoices.set(module.id, new Set([available.find((task) => task.name === preferred)?.name || available[0].name]));
+      }
     }
     for (const family of ["recon", "vulnerability"]) {
       const container = $(`#${family}-modules`);
@@ -1484,25 +1509,6 @@
           updateScanLaunch();
         });
         append(card, tools, label);
-        if (module.id === "assets") {
-          const discovery = el("div", null, "scan-module-discovery");
-          const httpLabel = el("label", null, "checkbox");
-          const httpToggle = el("input");
-          httpToggle.type = "checkbox";
-          httpToggle.checked = state.discoveryHttpEnrichment;
-          httpToggle.disabled = scanning || state.me?.role === "viewer";
-          httpToggle.addEventListener("change", () => { state.discoveryHttpEnrichment = httpToggle.checked; renderScanModules(); });
-          append(httpLabel, httpToggle, el("span", "Active HTTP enrichment"));
-          const startButton = el("button", "Start Asset Discovery", "primary");
-          startButton.type = "button";
-          startButton.disabled = scanning || !state.projectId || state.scope?.status !== "approved" || state.me?.role === "viewer";
-          startButton.addEventListener("click", startAssetDiscovery);
-          const note = el("p", state.discoveryHttpEnrichment
-            ? "Runs passive sources, permitted DNS verification and explicitly enabled HTTP requests in sequence."
-            : "Runs passive sources and permitted DNS verification; no HTTP requests are made.", "muted field-hint");
-          append(discovery, httpLabel, startButton, note);
-          card.appendChild(discovery);
-        }
         container.appendChild(card);
       }
     }
@@ -1512,61 +1518,12 @@
   function updateScanLaunch() {
     const ready = state.scope?.status === "approved";
     const titles = scanModules.filter((module) => selectedModules.has(module.id)).map((module) => module.title);
-    $("#start-scanning-button").disabled = scanning || !state.projectId || !ready || !selectedModules.size || state.me?.role === "viewer";
+    $("#start-scanning-button").disabled = scanning || preparingScans || !state.projectId || !selectedModules.size || state.me?.role === "viewer";
     $("#start-scanning-button").textContent = scanning ? "Submitting…" : "Start scanning";
     $("#scan-selection-status").textContent = !state.projectId ? "Select a project to start scanning."
       : !state.scope ? "Loading project scope…"
       : !ready ? "Approve the project scope before starting."
       : titles.length ? `Selected: ${titles.join(", ")}` : "Select one or more techniques.";
-    for (const button of $$(".scan-module-discovery button")) {
-      button.disabled = scanning || !state.projectId || !ready || state.me?.role === "viewer";
-    }
-  }
-
-  async function startAssetDiscovery() {
-    if (scanning || !requireProject() || state.me?.role === "viewer") return;
-    if (state.scope?.status !== "approved") { notice("Approve the project Scope before starting Asset Discovery.", "error"); return; }
-    const projectId = state.projectId;
-    const ips = scopeScanIps();
-    if (!ips.length) {
-      openScanDialog(scanModules.find((module) => module.id === "assets"), "settings");
-      $("#scan-settings-error").textContent = "Add allowed IP address records in Scope before starting Asset Discovery. CIDR ranges are applied by the backend only when they are explicitly approved; the UI does not expand them.";
-      return;
-    }
-    const reverse = state.taskTypes.find((task) => task.name === "reverse.ip");
-    const configured = scanParams.get("reverse.ip")?.sources;
-    const sources = (Array.isArray(configured) ? configured : ["ptr", "shodan_internetdb"]).filter((source) =>
-      !reverse?.params_schema?.properties?.sources?.items?.enum
-      || reverse.params_schema.properties.sources.items.enum.includes(source));
-    if (!sources.length) {
-      openScanDialog(scanModules.find((module) => module.id === "assets"), "settings");
-      $("#scan-settings-error").textContent = "Select at least one source: PTR, Shodan InternetDB or Censys.";
-      return;
-    }
-    const payload = { preset: "asset_discovery", ips, sources, http_enrichment: state.discoveryHttpEnrichment };
-    const fingerprint = JSON.stringify({ projectId, ...payload });
-    if (!discoverySubmissionKeys.has(fingerprint)) discoverySubmissionKeys.set(fingerprint, crypto.randomUUID());
-    scanning = true;
-    renderScanModules();
-    $("#scan-error").textContent = "";
-    try {
-      await api(`/api/projects/${encodeURIComponent(projectId)}/chains`, {
-        method: "POST",
-        body: { ...payload, idempotency_key: discoverySubmissionKeys.get(fingerprint) },
-      });
-      discoverySubmissionKeys.delete(fingerprint);
-      notice(state.discoveryHttpEnrichment
-        ? "Asset Discovery chain submitted with explicit active HTTP enrichment."
-        : "Asset Discovery chain submitted without HTTP requests.", "success");
-    } catch (error) {
-      if (state.projectId === projectId) $("#scan-error").textContent = `${error.message} Retry to continue without duplicating the submitted run.`;
-    } finally {
-      scanning = false;
-      renderScanModules();
-      if (state.projectId === projectId) {
-        try { await loadJobs(); } catch (error) { notice(error.message, "error"); }
-      }
-    }
   }
 
   const scanFieldLabels = {
@@ -1587,37 +1544,157 @@
       .map((rule) => rule.value))];
   }
 
-  function scopeScanIps() {
-    const rules = state.scope?.rules || [];
-    return [...new Set(rules.filter((rule) => rule.kind === "ip" && !rule.exclusion
-      && !rules.some((excluded) => excluded.kind === "ip" && excluded.exclusion && excluded.value === rule.value))
-      .map((rule) => rule.value))];
-  }
-
   function hiddenScanField(task, key) {
-    return scanTargetFields.has(key) || (task.name === "subdomains.subfinder" && ["sources", "resolve"].includes(key))
+    return scanTargetFields.has(key) || (task.name === "http.probe" && key === "mode") || (task.name === "subdomains.subfinder" && ["sources", "resolve"].includes(key))
       || (task.name === "subdomains.discover" && key === "providers")
       || (task.name === "reverse.ip" && key === "providers")
       || (task.name === "dns.wordlist" && key === "words");
   }
 
   function defaultScanParams(task) {
-    const params = Object.fromEntries(Object.entries(scanParams.get(task.name) || {}).filter(([key]) => !hiddenScanField(task, key)));
+    const params = { ...(scanParams.get(task.name) || {}) };
     const domains = scopeScanDomains();
-    for (const key of Object.keys(task.params_schema.properties || {})) {
-      if (key === "ips") params.ips = scopeScanIps();
-      else if (key === "sources" && task.name === "reverse.ip") params.sources = ["ptr", "shodan_internetdb"];
-      else if (key === "domain") params.domain = domains[0] || "";
-      else if (["domains", "targets"].includes(key)) params[key] = domains;
-      else if (["seeds", "base_urls"].includes(key)) params[key] = domains.map((domain) => `https://${domain}/`);
+    if (task.name === "reverse.ip" && !params.sources) params.sources = ["ptr", "shodan_internetdb"];
+    if (scanModules.find((module) => module.id === "subdomains").tasks.includes(task.name)) {
+      for (const key of Object.keys(task.params_schema.properties || {})) {
+        if (key === "domain") params.domain = domains[0] || "";
+        else if (["domains", "targets"].includes(key)) params[key] = domains;
+      }
     }
     return params;
   }
+
+  function savedTargetIds(module) {
+    if (!targetSelections.has(module.id)) {
+      let ids = [];
+      try { ids = JSON.parse(localStorage.getItem(`lastest.targets.${state.projectId}.${module.id}`) || "[]"); } catch (_) {}
+      targetSelections.set(module.id, new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []));
+    }
+    return targetSelections.get(module.id);
+  }
+
+  async function targetCatalog() {
+    const projectId = state.projectId;
+    const data = await api(`/api/projects/${encodeURIComponent(projectId)}/assets/targets`);
+    if (state.projectId !== projectId) throw new Error("Project changed. Select targets in the current project.");
+    state.targetCatalog = data;
+    return data;
+  }
+
+  function readinessMessage(data) {
+    if (data.next === "scope_empty") return "Add DNS names, IP addresses or Networks to project Scope first.";
+    if (data.next === "approve_scope") return "Approve the project Scope before starting scans.";
+    if (data.next === "enumerate_subdomains") return "Assets are empty and Scope contains DNS names. Run Subdomain Enumeration first to populate Assets.";
+    return data.import_error || `Assets are empty. Import ${data.import_count} IP addresses from project Scope? This adds inventory records without scanning the network.`;
+  }
+
+  async function ensureAssetReadiness(data) {
+    if (data.next === "ready") return true;
+    $("#asset-readiness-description").textContent = readinessMessage(data);
+    $("#asset-readiness-error").textContent = "";
+    const action = $("#asset-readiness-action");
+    const importing = data.next === "import_scope";
+    action.textContent = importing ? "Import from Scope" : data.next === "enumerate_subdomains" ? "Configure Subdomain Enumeration" : "Open Scope";
+    action.disabled = importing && !!data.import_error;
+    action.onclick = async () => {
+      const projectId = state.projectId;
+      if (importing) {
+        action.disabled = true;
+        try {
+          await api(`/api/projects/${encodeURIComponent(projectId)}/assets/import-scope`, { method: "POST", body: { scope_version: data.scope_version } });
+          if (state.projectId !== projectId) return;
+          $("#asset-readiness-dialog").close();
+          await targetCatalog();
+          notice("IP addresses imported into Assets. Select hosts in module settings, then start scanning.", "success");
+          if (state.view === "assets") await loadDashboard();
+        } catch (error) { if (projectId === state.projectId) $("#asset-readiness-error").textContent = error.message; }
+        finally { action.disabled = false; }
+      } else {
+        $("#asset-readiness-dialog").close();
+        if (data.next === "enumerate_subdomains") {
+          selectedModules.clear(); selectedModules.add("subdomains"); renderScanModules();
+          openScanDialog(scanModules.find((module) => module.id === "subdomains"), "settings");
+        } else location.hash = "#scope";
+      }
+    };
+    $("#asset-readiness-dialog").showModal();
+    return false;
+  }
+
+  function updateTargetSummary() {
+    const summary = $("#scan-target-summary");
+    if (summary) summary.textContent = `${settingsTargetIds.size} ${settingsTargetIds.size === 1 ? "host" : "hosts"} selected`;
+  }
+
+  function targetEligible(row, module) {
+    return module.id === "http" ? row.urls.length > 0 : module.id === "ports" ? row.ips.length > 0 : true;
+  }
+
+  async function openTargetPicker(module) {
+    $("#scan-settings-error").textContent = "";
+    try {
+      const data = await targetCatalog();
+      if (settingsModule?.id !== module.id || !$("#scan-module-dialog").open) return;
+      if (data.next !== "ready") {
+        $("#scan-settings-error").textContent = readinessMessage(data);
+        return;
+      }
+      targetPickerRows = data.items;
+      targetPickerDraft = new Set([...settingsTargetIds].filter((id) => targetPickerRows.some((row) => row.id === id && targetEligible(row, module))));
+      targetPickerOffset = 0;
+      $("#asset-target-search").value = "";
+      $("#asset-target-title").textContent = `Select hosts · ${module.title}`;
+      $("#asset-target-hint").textContent = module.id === "http" ? "Select hosts with stored URLs. Hosts without URLs need Web Crawling first." : module.id === "ports" ? "The scan checks IP addresses associated with selected Assets." : "Select Assets for this module.";
+      renderTargetPicker();
+      $("#asset-target-dialog").showModal();
+    } catch (error) { $("#scan-settings-error").textContent = error.message; }
+  }
+
+  function filteredTargetRows() {
+    const query = $("#asset-target-search").value.trim().toLowerCase();
+    return targetPickerRows.filter((row) => [row.host || "", ...row.ips].some((value) => value.toLowerCase().includes(query)));
+  }
+
+  function renderTargetPicker() {
+    const rows = filteredTargetRows();
+    targetPickerOffset = Math.min(targetPickerOffset, Math.floor(Math.max(0, rows.length - 1) / 50) * 50);
+    $("#asset-target-rows").replaceChildren(table(["Select", "DNS name / IP", "Confidence / interest", "URLs"], rows.slice(targetPickerOffset, targetPickerOffset + 50), (row, column) => {
+      if (column === "DNS name / IP") {
+        const cell = el("div", row.host || row.ips.join(", "));
+        if (row.host && row.ips.length) cell.appendChild(el("div", row.ips.join(", "), "muted"));
+        return cell;
+      }
+      if (column === "Confidence / interest") return `${row.confidence || "unknown"} / ${row.interest || "unknown"}`;
+      if (column === "URLs") return row.urls.length;
+      const input = el("input"); input.type = "checkbox"; input.checked = targetPickerDraft.has(row.id);
+      input.disabled = !targetEligible(row, settingsModule);
+      input.setAttribute("aria-label", `Select ${row.host || row.ips.join(", ")}`);
+      input.addEventListener("change", () => {
+        if (input.checked) targetPickerDraft.add(row.id); else targetPickerDraft.delete(row.id);
+        $("#asset-target-count").textContent = `${targetPickerDraft.size} selected · ${rows.length} matching hosts`;
+      });
+      return input;
+    }));
+    $("#asset-target-count").textContent = `${targetPickerDraft.size} selected · ${rows.length} matching hosts`;
+    $("#asset-target-page").textContent = rows.length ? `${targetPickerOffset + 1}–${Math.min(targetPickerOffset + 50, rows.length)} of ${rows.length}` : "0 hosts";
+    $("#asset-target-previous").disabled = targetPickerOffset === 0;
+    $("#asset-target-next").disabled = targetPickerOffset + 50 >= rows.length;
+  }
+
+  $("#asset-target-search").addEventListener("input", () => { targetPickerOffset = 0; renderTargetPicker(); });
+  $("#asset-target-all").addEventListener("click", () => { for (const row of filteredTargetRows()) if (targetEligible(row, settingsModule)) targetPickerDraft.add(row.id); renderTargetPicker(); });
+  $("#asset-target-none").addEventListener("click", () => { targetPickerDraft.clear(); renderTargetPicker(); });
+  $("#asset-target-save").addEventListener("click", () => { settingsTargetIds = new Set(targetPickerDraft); updateTargetSummary(); $("#asset-target-dialog").close(); });
+  $("#asset-target-cancel").addEventListener("click", () => $("#asset-target-dialog").close());
+  $("#asset-target-previous").addEventListener("click", () => { targetPickerOffset -= 50; renderTargetPicker(); });
+  $("#asset-target-next").addEventListener("click", () => { targetPickerOffset += 50; renderTargetPicker(); });
+  $("#asset-readiness-cancel").addEventListener("click", () => $("#asset-readiness-dialog").close());
 
   function openScanDialog(module, action) {
     const subdomainSettings = module.id === "subdomains" && action === "settings";
     $("#scan-module-dialog").classList.toggle("scan-subdomain-settings", subdomainSettings);
     settingsModule = action === "settings" ? module : null;
+    settingsTargetIds = new Set(savedTargetIds(module));
     $("#scan-dialog-title").textContent = `${module.title} · ${action === "settings" ? "Settings" : "Information"}`;
     $("#scan-settings-error").textContent = "";
     const content = $("#scan-dialog-content");
@@ -1626,7 +1703,24 @@
     if (action === "info") {
       content.appendChild(el("p", `Planned tools · ${module.planned}`, "scan-planned"));
     } else {
-      content.appendChild(el("p", "Targets are taken automatically from the approved Scope of this project. Edit Scope to change them.", "muted"));
+      content.appendChild(el("p", module.id === "subdomains" ? "DNS names are taken from the approved Scope of this project."
+        : module.id === "assets" ? "Uses all current Assets and their DNS names and IP addresses. Scope controls permissions."
+        : "Choose hosts from project Assets. Scope controls permissions.", "muted"));
+      if (!["subdomains", "assets"].includes(module.id)) {
+        const targets = el("div", null, "scan-target-controls");
+        const choose = el("button", "Select hosts"); choose.type = "button";
+        choose.disabled = scanning || state.me?.role === "viewer";
+        choose.addEventListener("click", () => openTargetPicker(module));
+        const summary = el("span", "", "muted"); summary.id = "scan-target-summary";
+        append(targets, choose, summary); content.appendChild(targets); updateTargetSummary();
+      }
+      if (module.id === "assets") {
+        const toggle = el("input"); toggle.type = "checkbox"; toggle.id = "discovery-http-setting";
+        toggle.checked = state.discoveryHttpEnrichment; toggle.disabled = scanning || state.me?.role === "viewer";
+        const label = el("label", null, "checkbox"); append(label, toggle, el("span", "Active HTTP enrichment"));
+        content.appendChild(label);
+        content.appendChild(el("p", "Disabled by default. Enable to send HTTP requests in addition to passive enrichment and DNS verification.", "muted field-hint"));
+      }
       const tasks = moduleTasks(module);
       if (!tasks.length) content.appendChild(el("p", "No implemented tasks are available for this module yet.", "empty"));
       for (const task of tasks) {
@@ -1646,11 +1740,10 @@
         fields.hidden = !choice.checked || !task.available;
         choice.addEventListener("change", () => { fields.hidden = !choice.checked; });
         const params = defaultScanParams(task);
-        const ipTask = Object.hasOwn(task.params_schema.properties || {}, "ips");
-        const targets = ipTask ? scopeScanIps() : scopeScanDomains();
-        fields.appendChild(el("p", targets.length ? `${targets.length} ${ipTask ? "IP addresses" : "DNS names"} from project Scope: ${targets.join(", ")}`
-          : ipTask ? "No IP address records in Scope. Add allowed IP address records in Scope to use this task. DNS names alone do not authorize IP scanning."
-          : "No allowed DNS names in Scope. Add DNS Name records in Scope to use this task.", "muted field-hint"));
+        if (module.id === "subdomains") {
+          const targets = scopeScanDomains();
+          fields.appendChild(el("p", targets.length ? `${targets.length} DNS names from project Scope: ${targets.join(", ")}` : "Add allowed DNS names to Scope first.", "muted field-hint"));
+        }
         if (task.name === "subdomains.discover") fields.appendChild(el("p", "Source: Cert Spotter (Certificate Transparency). Finds names published in TLS certificates, then verifies A/AAAA before adding them to Assets.", "muted field-hint"));
         if (task.name === "dns.records") fields.appendChild(el("p", "Query DNS records for names in project Scope. This does not discover subdomains by guessing names. Leave record types empty to query A, AAAA, CNAME, MX, NS and TXT.", "muted field-hint"));
         for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
@@ -1701,7 +1794,19 @@
             label.className = "checkbox";
             append(label, input, el("span", scanFieldLabels[key] || key));
             field.appendChild(label);
-          } else append(field, label, input);
+          } else {
+            if (key === "ports") {
+              const preset = el("select"); preset.setAttribute("aria-label", `Port preset for ${task.title}`);
+              const presets = { common: "22, 80, 443, 445, 3389, 8080, 8443", web: "80, 443, 8000, 8080, 8443, 8888" };
+              preset.append(new Option("Common services", "common"), new Option("Web services", "web"), new Option("Custom ports", "custom"));
+              if (!input.value) input.value = presets.common;
+              preset.value = Object.keys(presets).find((key) => presets[key].replaceAll(" ", "") === input.value.replaceAll(" ", "")) || "custom";
+              preset.addEventListener("change", () => { if (presets[preset.value]) input.value = presets[preset.value]; });
+              input.addEventListener("input", () => { preset.value = "custom"; });
+              preset.disabled = input.disabled;
+              append(field, label, preset, input);
+            } else append(field, label, input);
+          }
           const help = {
             wordlist: "Full built-in dnsmap wordlist: 989 entries.",
             concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
@@ -1758,6 +1863,7 @@
   }
 
   $("#close-scan-dialog").addEventListener("click", () => $("#scan-module-dialog").close());
+  $("#cancel-scan-settings").addEventListener("click", () => $("#scan-module-dialog").close());
   $("#scan-settings-form").addEventListener("submit", (event) => {
     event.preventDefault();
     try {
@@ -1770,47 +1876,64 @@
       if (!choices.size) throw new Error("Select at least one available task.");
       scanChoices.set(settingsModule.id, choices);
       for (const [name, params] of updates) scanParams.set(name, params);
+      if (settingsModule.id === "assets") state.discoveryHttpEnrichment = $("#discovery-http-setting").checked;
+      if (!["subdomains", "assets"].includes(settingsModule.id)) {
+        targetSelections.set(settingsModule.id, new Set(settingsTargetIds));
+        try { localStorage.setItem(`lastest.targets.${state.projectId}.${settingsModule.id}`, JSON.stringify([...settingsTargetIds])); } catch (_) {}
+      }
       $("#scan-module-dialog").close();
       renderScanModules();
     } catch (error) { $("#scan-settings-error").textContent = error.message; }
   });
 
   $("#start-scanning-button").addEventListener("click", async () => {
-    if (scanning || !requireProject() || state.me?.role === "viewer" || state.scope?.status !== "approved") return;
+    if (scanning || preparingScans || !requireProject() || state.me?.role === "viewer") return;
     const projectId = state.projectId;
     const tasks = new Map();
-    for (const module of scanModules.filter((item) => selectedModules.has(item.id))) {
-      for (const task of moduleTasks(module).filter((item) => item.available && scanChoices.get(module.id)?.has(item.name))) {
-        const params = defaultScanParams(task);
-        const ipTask = Object.hasOwn(task.params_schema.properties || {}, "ips");
-        if (!(ipTask ? scopeScanIps() : scopeScanDomains()).length) {
-          openScanDialog(module, "settings");
-          $("#scan-settings-error").textContent = `Add allowed ${ipTask ? "IP address" : "DNS Name"} records in project Scope before starting ${task.title}.`;
-          return;
+    let catalog;
+    preparingScans = true;
+    updateScanLaunch();
+    try {
+      catalog = await targetCatalog();
+      if (projectId !== state.projectId) return;
+      const needsAssets = [...selectedModules].some((id) => id !== "subdomains");
+      if (needsAssets && !await ensureAssetReadiness(catalog)) return;
+      if (!needsAssets && (state.scope?.status !== "approved" || !scopeScanDomains().length)) {
+        $("#scan-error").textContent = "Add and approve DNS names in Scope before Subdomain Enumeration.";
+        return;
+      }
+      for (const module of scanModules.filter((item) => selectedModules.has(item.id))) {
+        let assetIds;
+        if (module.id !== "subdomains") {
+          assetIds = module.id === "assets" ? catalog.items.map((row) => row.id) : [...savedTargetIds(module)];
+          const rows = assetIds.map((id) => catalog.items.find((row) => row.id === id));
+          if (!assetIds.length || rows.some((row) => !row || !targetEligible(row, module))) {
+            openScanDialog(module, "settings");
+            $("#scan-settings-error").textContent = module.id === "http" ? "Select hosts with collected URLs. Run Web Crawling first if no URLs are available." : "Select and save hosts from Assets before starting this module.";
+            return;
+          }
         }
-        const missing = (task.params_schema.required || []).find((key) => !params[key] || (Array.isArray(params[key]) && !params[key].length));
-        if (missing) {
-          openScanDialog(module, "settings");
-          $("#scan-settings-error").textContent = `Configure ${scanFieldLabels[missing] || missing} before starting.`;
-          return;
-        }
-        const runs = task.name === "dns.wordlist" ? scopeScanDomains().map((domain) => ({ ...params, domain })) : [params];
-        for (const run of runs) {
-          if (module.id === "assets") {
-            const chain = { preset: "asset_discovery", ips: run.ips, sources: run.sources, http_enrichment: state.discoveryHttpEnrichment };
-            tasks.set(JSON.stringify(chain), { task_type: "asset_discovery", params: chain });
-          } else tasks.set(JSON.stringify({ task_type: task.name, params: run }), { task_type: task.name, params: run });
+        for (const task of moduleTasks(module).filter((item) => item.available && scanChoices.get(module.id)?.has(item.name))) {
+          const params = defaultScanParams(task);
+          const runs = task.name === "dns.wordlist" ? scopeScanDomains().map((domain) => ({ ...params, domain })) : [params];
+          for (const run of runs) {
+            if (module.id === "assets") {
+              const chain = { preset: "asset_discovery", asset_ids: assetIds, sources: run.sources, http_enrichment: state.discoveryHttpEnrichment };
+              tasks.set(JSON.stringify(chain), { task_type: "asset_discovery", params: chain });
+            } else tasks.set(JSON.stringify({ task_type: task.name, params: run, asset_ids: assetIds }), { task_type: task.name, params: run, asset_ids: assetIds });
+          }
         }
       }
-    }
+    } catch (error) { if (projectId === state.projectId) $("#scan-error").textContent = error.message; return; }
+    finally { preparingScans = false; updateScanLaunch(); }
     if (!tasks.size) return;
     scanning = true;
     renderScanModules();
     $("#scan-error").textContent = "";
     const submitted = [];
     try {
-      for (const { task_type, params } of tasks.values()) {
-        const fingerprint = JSON.stringify({ projectId, task_type, params });
+      for (const { task_type, params, asset_ids } of tasks.values()) {
+        const fingerprint = JSON.stringify({ projectId, task_type, params, asset_ids });
         if (!submissionKeys.has(fingerprint)) {
           const bytes = crypto.getRandomValues(new Uint8Array(16));
           submissionKeys.set(fingerprint, Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));
@@ -1818,7 +1941,7 @@
         const chain = task_type === "asset_discovery";
         await api(`/api/projects/${encodeURIComponent(projectId)}/${chain ? "chains" : "jobs"}`, {
           method: "POST", body: chain ? { ...params, idempotency_key: submissionKeys.get(fingerprint) }
-            : { task_type, params, idempotency_key: submissionKeys.get(fingerprint) },
+            : { task_type, params, asset_ids, idempotency_key: submissionKeys.get(fingerprint) },
         });
         submitted.push(task_type);
       }

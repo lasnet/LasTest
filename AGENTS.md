@@ -1,6 +1,7 @@
 # Инструкции для агентов LasTest
 
 - LasTest — Rust-приложение. `lastest serve` запускает API и встроенный интерфейс, `lastest worker` выполняет задачи, CLI обращается к API. Начальные сведения и ссылки на руководства находятся в [README.md](README.md). [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) хранит исходный проект архитектуры и причины перехода на Rust.
+- Актуальная продуктовая логика Project → Scope → Assets → модули зафиксирована в [docs/product-workflow.md](docs/product-workflow.md). Обновляй её вместе с изменениями процесса. После Subdomain Enumeration цели модулей выбираются из Assets, не вводятся вручную в настройках.
 - HTTP-маршруты находятся в `src/api/`, очередь и сохранение результатов в `src/db/` и `src/worker/`, реестр и обработчики в `src/tasks/`, сетевые клиенты и проверка целей в `src/net/` и `src/scope/`. При изменении задачи проверь параметры, разрешённые цели, формат результата и чтение его через API.
 - Проверяй задачи на локальных фикстурах или явно разрешённых целях. Храни секреты, рабочие базы и результаты вне Git. Сохраняй применённые миграции и совместимость импорта из 1.x. Фикстуры импорта находятся в `tests/fixtures/legacy/`.
 - Перед отправкой проверяй `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings` и `cargo test --locked --all-targets --all-features`. Для изменений Docker выполни сквозной сценарий из [чек-листа](docs/checks.md).

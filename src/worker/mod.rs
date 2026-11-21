@@ -210,6 +210,7 @@ impl Worker {
                 None
             },
             input_jobs,
+            asset_inputs: None,
         };
         let mut result = tasks::execute(&job, &ctx).await;
         let was_cancelled = cancel.load(Ordering::SeqCst) || shutdown.load(Ordering::SeqCst);

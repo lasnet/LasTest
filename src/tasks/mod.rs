@@ -2,6 +2,7 @@
 
 pub mod asset_classify;
 pub mod asset_enrich;
+pub mod asset_input;
 pub(crate) mod discovery;
 pub mod dns_tasks;
 pub mod dnsmap;
@@ -222,6 +223,8 @@ pub struct TaskContext {
     /// immediate predecessor; explicit `input_refs` select several stages of
     /// the same run.
     pub input_jobs: Vec<Job>,
+    /// Only server-owned, project-local selections, freshly verified by execute.
+    pub asset_inputs: Option<Vec<crate::db::asset_input::AssetInput>>,
 }
 
 impl TaskContext {
@@ -241,12 +244,42 @@ impl TaskContext {
     }
 
     pub fn allows_host_now(&self, host: &str) -> bool {
+        if let Some(inputs) = &self.asset_inputs {
+            return inputs
+                .iter()
+                .any(|input| input.host.as_deref() == Some(host))
+                && asset_input::allows_selected_host(&self.scope.snapshot, host)
+                && self
+                    .current_scope()
+                    .is_ok_and(|scope| asset_input::allows_selected_host(&scope, host));
+        }
         self.current_scope()
             .map(|current| self.scope.snapshot.allows_host(host) && current.allows_host(host))
             .unwrap_or(false)
     }
 
     pub fn allows_ip_now(&self, ip: std::net::IpAddr) -> bool {
+        if let Some(inputs) = &self.asset_inputs {
+            let Ok(current) = self.current_scope() else {
+                return false;
+            };
+            if self.scope.snapshot.exclusion_matches_ip(ip) || current.exclusion_matches_ip(ip) {
+                return false;
+            }
+            return inputs.iter().any(|input| {
+                input
+                    .ips
+                    .iter()
+                    .any(|value| canonical_ip(value).ok() == Some(ip))
+                    && match &input.host {
+                        Some(host) => {
+                            asset_input::allows_selected_host(&self.scope.snapshot, host)
+                                && asset_input::allows_selected_host(&current, host)
+                        }
+                        None => self.scope.snapshot.allows_ip(ip) && current.allows_ip(ip),
+                    }
+            });
+        }
         self.current_scope()
             .map(|current| self.scope.snapshot.allows_ip(ip) && current.allows_ip(ip))
             .unwrap_or(false)
@@ -275,7 +308,8 @@ impl TaskContext {
     }
 
     pub fn authorize_host(&self, host: &str) -> Result<()> {
-        if self.scope.allows_host(host) && self.allows_host_now(host) {
+        self.ensure_active()?;
+        if self.allows_host_now(host) {
             Ok(())
         } else {
             anyhow::bail!("host {host} is outside the effective scope")
@@ -283,7 +317,8 @@ impl TaskContext {
     }
 
     pub fn authorize_ip(&self, ip: std::net::IpAddr) -> Result<()> {
-        if !self.scope.allows_ip(ip) || !self.allows_ip_now(ip) {
+        self.ensure_active()?;
+        if !self.allows_ip_now(ip) {
             anyhow::bail!("IP {ip} is not explicitly allowed by the effective IP/CIDR scope");
         }
         self.config.network_policy().permits(ip)?;
@@ -331,10 +366,16 @@ impl TaskContext {
     pub fn observations_for_host(&self, host: &str) -> Result<Vec<Value>> {
         let mut rows = self.db.observations_for_host(&self.project_id, host)?;
         if !self.input_jobs.is_empty() {
+            let selected = self.asset_inputs.as_ref().is_some_and(|inputs| {
+                inputs.iter().any(|input| {
+                    input.host.as_deref() == Some(host) || input.ips.iter().any(|ip| ip == host)
+                })
+            });
             rows.retain(|row| {
-                row["job_id"]
-                    .as_str()
-                    .is_some_and(|id| self.input_jobs.iter().any(|job| job.id == id))
+                selected
+                    || row["job_id"]
+                        .as_str()
+                        .is_some_and(|id| self.input_jobs.iter().any(|job| job.id == id))
             });
         }
         Ok(rows)
@@ -343,6 +384,31 @@ impl TaskContext {
 
 pub async fn execute(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
     ctx.ensure_active()?;
+    let mut job = job.clone();
+    let prepared;
+    let ctx = if let Some(metadata) = job
+        .params
+        .as_object_mut()
+        .and_then(|params| params.remove(asset_input::INPUT_KEY))
+    {
+        prepared = asset_input::prepare(&job, ctx, &metadata).await?;
+        if matches!(
+            job.task_type.as_str(),
+            "reverse.ip" | "tcp.connect" | "nmap.profile"
+        ) {
+            job.params["ips"] = serde_json::json!(prepared
+                .asset_inputs
+                .as_ref()
+                .into_iter()
+                .flatten()
+                .flat_map(|input| input.ips.clone())
+                .collect::<std::collections::BTreeSet<_>>());
+        }
+        &prepared
+    } else {
+        ctx
+    };
+    let job = &job;
     match job.task_type.as_str() {
         "dns.records" => dns_tasks::run_records(job, ctx).await,
         "dns.wordlist" => dns_tasks::run_wordlist(job, ctx).await,

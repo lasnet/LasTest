@@ -163,10 +163,6 @@ button.icon-button { width: 34px; min-height: 34px; padding: 0; border-color: tr
 .assets-toolbar .field { flex: 1 1 240px; }
 .assets-toolbar .button-row { margin-top: 0; }
 .assets-pagination { display: flex; flex-wrap: wrap; justify-content: end; align-items: center; gap: 12px; margin-top: 16px; }
-.scan-module-discovery { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
-.scan-module-discovery .checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.scan-module-discovery input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; margin: 0; padding: 0; flex: none; }
-.scan-module-discovery .field-hint { margin: 0; }
 .details-grid { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 4px 14px; margin: 12px 0 18px; }
 .details-grid .muted { font-size: 13px; }
 .details-list { margin: 6px 0 14px; padding-left: 20px; }
@@ -174,6 +170,19 @@ button.icon-button { width: 34px; min-height: 34px; padding: 0; border-color: tr
 .evidence-row p { margin: 4px 0; }
 .details-json { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 #candidate-detail-dialog, #asset-detail-dialog { width: min(820px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); overflow-y: auto; }
+#asset-detail-dialog.asset-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(760px, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: 24px; }
+#asset-detail-content h3 { margin: 24px 0 8px; }
+#asset-detail-content p { margin-block: 6px; overflow-wrap: anywhere; }
+.asset-drawer > .scan-dialog-heading { position: sticky; top: -24px; z-index: 1; background: var(--paper); padding-block: 12px; }
+#asset-target-dialog { width: min(920px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
+#asset-target-dialog input[type="checkbox"], #scan-dialog-content input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 0; flex: none; }
+#scan-dialog-content > .checkbox { display: flex; align-items: center; gap: 8px; }
+.scan-target-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.target-picker-tools { flex-wrap: wrap; margin-block: 14px; }
+#scan-dialog-content .source-choices { min-width: 0; border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+#scan-dialog-content .source-choices legend { margin-bottom: 8px; padding: 0; font-weight: 500; }
+@media (prefers-reduced-motion: no-preference) { .asset-drawer[open] { animation: asset-drawer-in 160ms ease-out; } }
+@keyframes asset-drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
 button.danger:not(:disabled), button.asset-delete:not(:disabled) { color: var(--danger); }
 button.danger:hover:not(:disabled), button.asset-delete:hover:not(:disabled) { background: var(--danger-surface); border-color: var(--danger); }
 #assets-inventory td:first-child { overflow-wrap: anywhere; }
