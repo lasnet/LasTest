@@ -16,6 +16,7 @@ pub mod registry;
 pub mod subfinder;
 pub mod tech_catalog;
 pub mod web_checks;
+mod whatweb;
 
 use crate::config::Config;
 use crate::db::jobs::{NewFinding, NewObservation};

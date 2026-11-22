@@ -69,6 +69,7 @@ pub struct Config {
     pub nmap_path: Option<PathBuf>,
     pub subfinder_path: Option<PathBuf>,
     pub dnsmap_path: Option<PathBuf>,
+    pub whatweb_path: Option<PathBuf>,
     pub dnsmap_timeout_seconds: u64,
     pub subfinder_timeout_seconds: u64,
     pub nmap_timeout_seconds: u64,
@@ -161,6 +162,7 @@ impl Default for Config {
             nmap_path: None,
             subfinder_path: None,
             dnsmap_path: None,
+            whatweb_path: None,
             dnsmap_timeout_seconds: 7200,
             subfinder_timeout_seconds: 150,
             nmap_timeout_seconds: 120,
@@ -235,6 +237,9 @@ impl Config {
         }
         if let Ok(value) = std::env::var("LASTEST_SUBFINDER_PATH") {
             self.subfinder_path = (!value.trim().is_empty()).then(|| PathBuf::from(value));
+        }
+        if let Ok(value) = std::env::var("LASTEST_WHATWEB_PATH") {
+            self.whatweb_path = (!value.trim().is_empty()).then(|| PathBuf::from(value.trim()));
         }
         if let Ok(value) = std::env::var("LASTEST_DATA_DIR") {
             if !value.trim().is_empty() {

@@ -395,7 +395,7 @@
 
   function route() {
     const hash = (location.hash || "#dashboard").replace("#", "");
-    const view = hash.startsWith("settings/") ? "settings" : hash;
+    const view = hash.startsWith("settings/") ? "settings" : hash.startsWith("assets/") ? "assets" : hash;
     const allowed = ["dashboard", "scope", "scans", "assets", "findings", "reports", "users", "settings"];
     state.view = allowed.includes(view) ? view : "dashboard";
     if (["users", "settings"].includes(state.view) && state.me?.role !== "admin") state.view = "dashboard";
@@ -411,12 +411,14 @@
       if (tab === "api") loadSettingsProviders();
       return;
     }
+    if (state.view === "assets") selectAssetsTab(hash.slice("assets/".length));
     render();
     if (state.view === "scans" && state.me) loadTaskTypes();
     refreshCurrent();
   }
 
   const settingsTabs = $$("[data-settings-tab]");
+  const assetsTabs = $$("[data-assets-tab]");
   let settingsProviderRequest = 0;
   let editingProvider = null;
 
@@ -424,6 +426,18 @@
     const selected = settingsTabs.find((tab) => tab.dataset.settingsTab === name) || settingsTabs[0];
     const focusIsOnTab = settingsTabs.includes(document.activeElement);
     for (const tab of settingsTabs) {
+      const active = tab === selected;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+    }
+    if (focusIsOnTab) selected.focus();
+  }
+
+  function selectAssetsTab(name) {
+    const selected = assetsTabs.find((tab) => tab.dataset.assetsTab === name) || assetsTabs[0];
+    const focusIsOnTab = assetsTabs.includes(document.activeElement);
+    for (const tab of assetsTabs) {
       const active = tab === selected;
       tab.setAttribute("aria-selected", String(active));
       tab.tabIndex = active ? 0 : -1;
@@ -1351,6 +1365,28 @@
       menuButton.focus();
       menuButton.setAttribute("aria-expanded", "false");
     }
+  });
+  for (const tab of assetsTabs) {
+    tab.addEventListener("click", () => {
+      const name = tab.dataset.assetsTab;
+      location.hash = name === "hosts" ? "assets" : `assets/${name}`;
+    });
+  }
+  $("#assets-tabs").addEventListener("keydown", (event) => {
+    const current = assetsTabs.indexOf(event.target);
+    if (current === -1) return;
+    const last = assetsTabs.length - 1;
+    let next;
+    switch (event.key) {
+      case "ArrowLeft": next = current === 0 ? last : current - 1; break;
+      case "ArrowRight": next = current === last ? 0 : current + 1; break;
+      case "Home": next = 0; break;
+      case "End": next = last; break;
+      default: return;
+    }
+    event.preventDefault();
+    assetsTabs[next].focus();
+    assetsTabs[next].click();
   });
   for (const tab of settingsTabs) {
     tab.addEventListener("click", () => {

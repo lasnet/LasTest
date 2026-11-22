@@ -25,6 +25,19 @@ RUN patch -p1 < /tmp/dnsmap-probes.patch \
     && mkdir /out && gcc -O2 src/dnsmap.c -o /out/dnsmap \
     && cp COPYING /out/COPYING
 
+# WhatWeb 0.6.4. The plugin loader requires both directories, even when my-plugins is empty.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS whatweb
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl --fail --location --retry 3 https://codeload.github.com/urbanadventurer/WhatWeb/tar.gz/d279d93042d034f3fd29d5a893d44ccc0595d3f8 -o /tmp/whatweb.tar.gz \
+    && echo 'f239c8d23b9b1d92d896351236ce0c00f08316897f8581212228adf13c521495  /tmp/whatweb.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/whatweb.tar.gz --strip-components=1 \
+    && mkdir -p /out/plugins /out/my-plugins \
+    && cp -R whatweb lib LICENSE /out/ \
+    && cp plugins/jenkins.rb plugins/jquery.rb /out/plugins/ \
+    && chmod 755 /out/whatweb
+
 FROM rust:1.100-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
@@ -35,7 +48,7 @@ RUN cargo build --locked --release
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates ruby ruby-addressable \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 lastest \
     && useradd --uid 10001 --gid 10001 --home-dir /data --no-create-home --shell /usr/sbin/nologin lastest \
@@ -48,11 +61,14 @@ COPY --from=dnsmap /tmp/dnsmap.tar.gz /usr/share/licenses/dnsmap/source.tar.gz
 COPY src/tasks/dnsmap-probes.patch /usr/share/licenses/dnsmap/dnsmap-probes.patch
 COPY --from=subfinder /out/subfinder /usr/local/bin/subfinder
 COPY --from=subfinder /out/LICENSE.md /usr/share/licenses/subfinder/LICENSE.md
+COPY --from=whatweb /out/ /opt/whatweb/
+COPY --from=whatweb /tmp/whatweb.tar.gz /usr/share/licenses/whatweb/source.tar.gz
 ENV LASTEST_DATA_DIR=/data \
     LASTEST_BIND=0.0.0.0:8080 \
     LASTEST_LOG_LEVEL=info \
     LASTEST_SUBFINDER_PATH=/usr/local/bin/subfinder \
-    LASTEST_DNSMAP_PATH=/usr/local/bin/dnsmap
+    LASTEST_DNSMAP_PATH=/usr/local/bin/dnsmap \
+    LASTEST_WHATWEB_PATH=/opt/whatweb/whatweb
 USER 10001:10001
 EXPOSE 8080
 VOLUME ["/data"]

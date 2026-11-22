@@ -4,7 +4,7 @@
 use crate::domain::{Job, NewCandidate, NewEnrichment};
 use crate::scope::normalize_domain;
 use crate::tasks::discovery;
-use crate::tasks::http_tasks::{cookie_names, detect_technologies, extract_title};
+use crate::tasks::http_tasks::{cookie_names, extract_title};
 use crate::tasks::{parse_params, TaskContext, TaskOutcome};
 use anyhow::Result;
 use serde::Deserialize;
@@ -432,7 +432,7 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                         .await
                     {
                         Ok(fetch) => {
-                            let technologies = detect_technologies(&fetch);
+                            let technologies = super::whatweb::detect(&fetch, ctx).await?;
                             let final_host = crate::scope::parse_target_url(&fetch.final_url)
                                 .ok()
                                 .and_then(|url| url.host_str().map(str::to_string))
@@ -583,7 +583,8 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
                     .await
                 {
                     Ok(fetch) => {
-                        let data = json!({"url":fetch.final_url,"status_code":fetch.status,"title":extract_title(&fetch.body),"server":fetch.header("server").unwrap_or(""),"verified_ip":fetch.remote_ip.to_string(),"technologies":detect_technologies(&fetch)});
+                        let technologies = super::whatweb::detect(&fetch, ctx).await?;
+                        let data = json!({"url":fetch.final_url,"status_code":fetch.status,"title":extract_title(&fetch.body),"server":fetch.header("server").unwrap_or(""),"verified_ip":fetch.remote_ip.to_string(),"technologies":technologies});
                         outcome.observe(
                             "assets.enrich",
                             "http",

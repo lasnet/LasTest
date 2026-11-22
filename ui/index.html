@@ -315,7 +315,12 @@
       </section>
 
       <section data-view="assets" class="view" hidden aria-labelledby="assets-title">
-        <section class="panel">
+        <div id="assets-tabs" class="section-tabs" role="tablist" aria-label="Assets sections">
+          <button id="assets-tab-hosts" type="button" role="tab" aria-selected="true" aria-controls="assets-panel-hosts" data-assets-tab="hosts">Hosts and IP addresses</button>
+          <button id="assets-tab-candidates" type="button" role="tab" aria-selected="false" aria-controls="assets-panel-candidates" data-assets-tab="candidates" tabindex="-1">Discovery candidates</button>
+          <button id="assets-tab-urls" type="button" role="tab" aria-selected="false" aria-controls="assets-panel-urls" data-assets-tab="urls" tabindex="-1">URLs</button>
+        </div>
+        <section id="assets-panel-hosts" class="panel" role="tabpanel" aria-labelledby="assets-tab-hosts" tabindex="0">
           <h2>Hosts and IP addresses</h2>
           <div class="assets-toolbar">
             <div class="field"><label for="assets-search">Search hosts or IP addresses</label><input id="assets-search" type="search" placeholder="Host or IP address" autocomplete="off"></div>
@@ -333,7 +338,7 @@
             <button id="assets-next" type="button">Next</button>
           </nav>
         </section>
-        <section class="panel">
+        <section id="assets-panel-candidates" class="panel" role="tabpanel" aria-labelledby="assets-tab-candidates" tabindex="0" hidden>
           <header class="panel-heading">
             <div>
               <h2>Discovery candidates</h2>
@@ -359,7 +364,7 @@
           </nav>
           <div id="provider-catalog" class="muted"></div>
         </section>
-        <section class="panel"><h2>URLs</h2><div id="assets-urls"></div></section>
+        <section id="assets-panel-urls" class="panel" role="tabpanel" aria-labelledby="assets-tab-urls" tabindex="0" hidden><h2>URLs</h2><div id="assets-urls"></div></section>
       </section>
 
       <section data-view="findings" class="view" hidden aria-labelledby="findings-title">
@@ -403,7 +408,7 @@
       </section>
 
       <section data-view="settings" class="view" hidden aria-labelledby="settings-title">
-        <div id="settings-tabs" class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <div id="settings-tabs" class="settings-tabs section-tabs" role="tablist" aria-label="Settings sections">
           <button id="settings-tab-general" type="button" role="tab" aria-selected="true" aria-controls="settings-general" data-settings-tab="general">General</button>
           <button id="settings-tab-api" type="button" role="tab" aria-selected="false" aria-controls="settings-api" data-settings-tab="api" tabindex="-1">API</button>
           <button id="settings-tab-wordlist" type="button" role="tab" aria-selected="false" aria-controls="settings-wordlist" data-settings-tab="wordlist" tabindex="-1">WordList</button>

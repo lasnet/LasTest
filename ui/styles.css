@@ -369,8 +369,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .view { display: grid; gap: var(--gap); min-width: 0; }
 
 .app-shell:has([data-view="settings"]:not([hidden])) :is(#new-project-button, #new-project-panel, .theme-control) { display: none; }
-.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); }
-.settings-tabs button {
+.section-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--rule); }
+.section-tabs button {
   min-height: 44px;
   padding-inline: 14px;
   border: 0;
@@ -379,9 +379,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   background: transparent;
   color: var(--muted);
 }
-.settings-tabs button[aria-selected="false"]:hover { border-bottom-color: var(--control); color: var(--ink); }
-.settings-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); }
-.settings-tabs button:focus-visible { outline-offset: -4px; }
+.section-tabs button[aria-selected="false"]:hover { border-bottom-color: var(--control); color: var(--ink); }
+.section-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); }
+.section-tabs button:focus-visible { outline-offset: -4px; }
 .settings-theme { max-width: 17rem; }
 .wordlist-form { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--rule); }
 .wordlist-form h3 { font-size: 15px; }

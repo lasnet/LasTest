@@ -154,8 +154,26 @@ PERSISTED="$(cli job status --id "$JOB_ID")"
 python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["job"]["status"]=="succeeded"' <<<"$PERSISTED"
 cli job status --id "$DNS_JOB_ID" | python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; assert j["status"]=="succeeded" and j["result"]["found"]==["api.lastest.test"]'
 
-echo "[9/9] verify runtime excludes Go/Python/compilers and uses a non-root user"
+echo "[9/9] verify bundled tools, offline WhatWeb and non-root runtime"
 docker run --rm --entrypoint /usr/local/bin/subfinder "$LASTEST_IMAGE" -version
+docker run --rm -i --network none --read-only --tmpfs /tmp:size=64m,mode=1777 \
+  --cap-drop ALL --security-opt no-new-privileges:true --entrypoint sh "$LASTEST_IMAGE" -eu <<'SH'
+test "$LASTEST_WHATWEB_PATH" = /opt/whatweb/whatweb
+test -r /opt/whatweb/LICENSE
+test -r /usr/share/licenses/whatweb/source.tar.gz
+cd /tmp
+printf 'HTTP/1.1 200 Response\r\nX-Jenkins: 2.516.1\r\n\r\n<!doctype html>\n<script src="/jquery-3.7.1.min.js"></script>\n' > response.http
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp "$LASTEST_WHATWEB_PATH" \
+  --plugins=jenkins,jquery --aggression=1 --follow-redirect=never --no-cookies \
+  --max-threads=1 --quiet --log-json=- /tmp/response.http > result.json
+ruby -rjson -e '
+  response, extra = JSON.parse(File.read("result.json"))
+  abort "unexpected WhatWeb response" unless response["target"] == "/tmp/response.http" && response["http_status"] == 200 && extra.nil?
+  plugins = response.fetch("plugins")
+  abort "unexpected WhatWeb fingerprints" unless plugins.keys.sort == %w[JQuery Jenkins] &&
+    plugins.dig("Jenkins", "version") == ["2.516.1"] && plugins.dig("JQuery", "version") == ["3.7.1"]
+'
+SH
 cli task-types | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["limitations"]["max_concurrent_jobs"]==4; items=d["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"]); dns=next(item for item in items if item["name"]=="dns.wordlist"); assert dns["params_schema"]["properties"]["concurrency"]=={"type":"integer","enum":[10,20,50,100],"default":20}; assert dns["limits"]["timeout_seconds"]==7200'
 docker run --rm --entrypoint sh "$LASTEST_IMAGE" -eu -c \
   '! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'

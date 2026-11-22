@@ -78,6 +78,105 @@ fn host_and_http(host: &str, url: &str, product: &str) -> TaskOutcome {
     outcome
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn whatweb_enriches_the_saved_response_and_keeps_native_evidence_on_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = TestEnv::new();
+    let mut ctx = task_context(
+        &env,
+        Scope::new(scope_rules(&[("exact", "localhost")])).unwrap(),
+        "whatweb-http-response",
+    );
+    let dns = spawn_dns_response_server(|_, kind| {
+        if kind == 1 {
+            (0, vec![vec![127, 0, 0, 1]])
+        } else {
+            (3, Vec::new())
+        }
+    })
+    .await;
+    ctx.config.dns_server = Some(dns.addr.to_string());
+    let server = spawn_http_server(|_| {
+        HttpResponse::new(200, "<p>Use jquery-1.2.3.min.js</p><script src='https://cdn.example.test/jquery-3.7.1.min.js?token=secret-fixture'></script>")
+            .header("Content-Type", "text/html")
+            .header("Server", "nginx/1.26.3")
+            .header("X-Jenkins", "2.516.1")
+            .header("Set-Cookie", "session=secret-fixture")
+    })
+    .await;
+    let url = format!("http://localhost:{}/fixture", server.addr.port());
+    publish(&ctx, host_and_http("localhost", &url, "nginx"));
+    let asset = env
+        .db
+        .host_asset_by_canonical(&ctx.project_id, "localhost")
+        .unwrap()
+        .unwrap();
+    let path = env.temp.path().join("whatweb-fixture");
+    std::fs::write(&path, r#"#!/bin/sh
+set -eu
+test "$1" = '--plugins=jenkins,jquery'
+test "$2" = '--aggression=1'
+test "$3" = '--follow-redirect=never'
+test "$7" = '--log-json=-'
+test "$#" -eq 8
+case "$8" in /*/response.http) ;; *) exit 12 ;; esac
+grep -q 'X-Jenkins: 2.516.1' "$8"
+grep -q 'jquery-3.7.1.min.js' "$8"
+if grep -Eq 'secret-fixture|http://localhost|cdn.example.test|jquery-1.2.3' "$8"; then exit 13; fi
+printf '[{"target":"%s","http_status":200,"plugins":{"Jenkins":{"version":["2.516.1","bad version"]},"JQuery":{"version":["3.7.1"]},"Unexpected":{"version":["1.2"]}}}]\n' "$8"
+"#).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let job = make_job(
+        "assets.enrich",
+        json!({"asset_ids":[asset["id"]],"http_enrichment":true}),
+    );
+    ctx.config.whatweb_path = Some(path.clone());
+    let outcome = asset_enrich::run(&job, &ctx).await.unwrap();
+    let technologies = &outcome.enrichments[0].data["technologies"];
+    for (name, version) in [("jenkins", "2.516.1"), ("jquery", "3.7.1")] {
+        assert!(
+            technologies
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["name"] == name
+                    && row["versions"] == json!([version])
+                    && row["evidence"][0]["source"] == "whatweb"),
+            "{technologies}"
+        );
+    }
+    assert!(!technologies.to_string().contains("Unexpected"));
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+
+    std::fs::write(path, "#!/bin/sh\nprintf 'not JSON'\n").unwrap();
+    let fallback = asset_enrich::run(&job, &ctx).await.unwrap();
+    assert!(fallback.error.is_none(), "{:?}", fallback.error);
+    assert!(fallback.enrichments[0].data["technologies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["name"] == "nginx"));
+    assert!(!fallback.enrichments[0].data["technologies"]
+        .to_string()
+        .contains("whatweb"));
+
+    publish(&ctx, outcome);
+    let details = env
+        .db
+        .asset_detail(&ctx.project_id, asset["id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(details["technologies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["name"] == "jquery"
+            && row["version"] == "3.7.1"
+            && row["sources"] == json!(["whatweb"])));
+}
+
 #[tokio::test]
 async fn failed_http_enrichment_keeps_attempt_details_in_the_summary_artifact() {
     let env = TestEnv::new();

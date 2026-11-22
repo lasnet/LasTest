@@ -66,6 +66,9 @@ tls_expiry_warning_days = 30
 # Optional Nmap adapter. The profile is fixed to unprivileged TCP service
 # detection; raw packets, OS detection and NSE are outside this release.
 # nmap_path = "/usr/bin/nmap"
+# The Docker image sets LASTEST_WHATWEB_PATH=/opt/whatweb/whatweb.
+# For a worker outside Docker, install WhatWeb 0.6.4 and set its path.
+# whatweb_path = "/usr/local/bin/whatweb"
 nmap_timeout_seconds = 120
 nmap_max_output_bytes = 4194304
 

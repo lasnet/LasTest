@@ -27,7 +27,8 @@ Scans организован в Recon и Vulnerability Analysis. Круглый 
 - **assets.enrich** — объединяет сохранённые DNS/HTTP/портовые/провайдерные данные и повторно проверяет кандидатов по действующему Scope. `http_enrichment` по умолчанию `false`; активные HTTP-запросы выполняются только при явном включении и полном допуске хоста, через существующий HttpProber с проверкой редиректов.
 - **assets.classify** — локальная версионированная классификация и Tech routing по уже сохранённым данным: группы `wordpress`, `jira`, `grafana`, `nginx`, `php`, `spring`, `unknown`, категории, surface hints и раздельные `confidence`/`interest` с основаниями. Сеть не используется.
 - Пресет цепочки `Asset Discovery` выполняет `reverse.ip` → `assets.enrich` → `assets.classify` последовательно. Старые цепочки и `All in one` не меняются.
-- **hakrevdns**, **theHarvester**, **WhatWeb**, ASN-перебор, облачные хранилища и внешние сканеры остаются вне текущего объёма. HTTP technology hints доступны также в HTTP Probing.
+- **WhatWeb** дополняет Active HTTP enrichment версиями Jenkins и jQuery. Worker использует эти два плагина WhatWeb 0.6.4 на временном снимке уже полученного HTTP-ответа. Снимок содержит заголовок версии `X-Jenkins` и пути из `script[src]`, извлечённые из первых 512 КиБ HTML. Результаты идут в существующий список технологий с источником `whatweb`. Стандартный Docker-образ содержит WhatWeb и задаёт `LASTEST_WHATWEB_PATH=/opt/whatweb/whatweb`. Для worker вне Docker установите WhatWeb отдельно и укажите абсолютный путь в `whatweb_path` или `LASTEST_WHATWEB_PATH`. При сбое или таймауте результат встроенного детектора сохраняется, причина пишется в лог worker.
+- **hakrevdns**, **theHarvester**, ASN-перебор и поиск облачных хранилищ остаются вне текущего объёма. Встроенные признаки технологий доступны также в HTTP Probing.
 
 ## Web Crawling
 
