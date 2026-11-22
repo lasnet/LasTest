@@ -67,7 +67,7 @@ lastest --data-dir /data restore --from ./backup-2026-11-15 --force
 | `subdomains.discover` | домены из scope/явно | подтверждённые A/AAAA имена и IP; wildcard, rejected, страницы и квоты в артефакте |
 | `subdomains.subfinder` | домены из scope/явно, источники; A/AAAA всегда | подтверждённые host, DNS/IP-наблюдения, subdomains artifact |
 | `dns.records` | цели + типы A/AAAA/CNAME/MX/NS/TXT/PTR | DNS-наблюдения, IP-связи, артефакт |
-| `dns.wordlist` | домен, ID встроенного или загруженного словаря, concurrency=4/8/16 (default 8); words через API | найденные хосты, wildcard-диагностика |
+| `dns.wordlist` | домен, ID встроенного или загруженного словаря, concurrency=10/20/50/100 (default 20); words через API | найденные хосты, wildcard-диагностика |
 | `reverse.ip` | явные IP; `sources` = ptr/shodan_internetdb/censys или legacy `providers` | кандидаты с происхождением, PTR, отдельно Shodan InternetDB/Censys, проверка A/AAAA |
 | `assets.enrich` | project-local candidate_ids/asset_ids или committed-вход цепочки; `http_enrichment` (default false) | снимок enrichment: DNS, HTTP, порты (confirmed/passive), сеть, технологии |
 | `assets.classify` | project-local кандидаты/активы или committed-вход цепочки | группы технологий, категории, surface hints, confidence/interest и evidence |

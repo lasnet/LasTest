@@ -2,7 +2,7 @@
 use crate::config::Config;
 use crate::db::Db;
 use crate::scope::normalize_domain;
-use crate::tasks::{discovery::allows_dns, parse_params, TaskContext};
+use crate::tasks::{discovery::allows_dns_in, parse_params, TaskContext};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -13,6 +13,8 @@ use tokio::task::JoinSet;
 
 pub const DEFAULT_WORDLIST: &str = include_str!("wordlists/default.txt");
 pub const MAX_WORDLIST_BYTES: usize = 1024 * 1024;
+pub const CONCURRENCY_OPTIONS: [usize; 4] = [10, 20, 50, 100];
+pub const DEFAULT_CONCURRENCY: usize = 20;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +34,7 @@ fn default_wordlist() -> String {
 }
 
 fn default_concurrency() -> usize {
-    8
+    DEFAULT_CONCURRENCY
 }
 
 pub fn available(config: &Config) -> bool {
@@ -49,8 +51,12 @@ pub fn prepare(
 ) -> Result<(WordlistParams, Vec<String>)> {
     let params: WordlistParams = parse_params(value)?;
     let domain = normalize_domain(&params.domain)?;
-    if !matches!(params.concurrency, 4 | 8 | 16) {
-        anyhow::bail!("dns.wordlist concurrency must be 4, 8 or 16");
+    // Existing queued jobs retain their original process count. New submissions
+    // are restricted to CONCURRENCY_OPTIONS by validate_submission.
+    if !CONCURRENCY_OPTIONS.contains(&params.concurrency)
+        && !matches!(params.concurrency, 4 | 8 | 16)
+    {
+        anyhow::bail!("dns.wordlist concurrency must be 10, 20, 50 or 100");
     }
     if domain.len() > 197 {
         anyhow::bail!("dnsmap domain exceeds its 197-byte input capacity");
@@ -153,13 +159,31 @@ pub async fn discover(
     let current = ctx.current_scope()?;
     let mut allowed = HashSet::new();
     let mut labels = Vec::new();
-    for word in words {
+    let mut scope_checked_at = std::time::Instant::now();
+    for (index, word) in words.iter().enumerate() {
+        if index % 256 == 0 {
+            ctx.ensure_active()?;
+            // Large uploaded lists must not block heartbeats or other job slots.
+            tokio::task::yield_now().await;
+            if scope_checked_at.elapsed() >= std::time::Duration::from_millis(100) {
+                anyhow::ensure!(
+                    ctx.current_scope()?.rules == current.rules,
+                    "dnsmap scope changed during preparation"
+                );
+                scope_checked_at = std::time::Instant::now();
+            }
+        }
         let host = candidate(word, &domain)?;
-        if allows_dns(ctx, &domain, &host)? {
+        if allows_dns_in(&ctx.scope.snapshot, &current, &domain, &host) {
             allowed.insert(host);
             labels.push(word.clone());
         }
     }
+    ctx.ensure_active()?;
+    anyhow::ensure!(
+        ctx.current_scope()?.rules == current.rules,
+        "dnsmap scope changed during preparation"
+    );
     if labels.is_empty() {
         return Ok(Vec::new());
     }

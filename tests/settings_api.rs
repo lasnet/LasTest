@@ -339,6 +339,10 @@ done < "$3"
         dnsmap["params_schema"]["properties"]["wordlist"]["enum"],
         json!(["default", id])
     );
+    assert_eq!(
+        dnsmap["params_schema"]["properties"]["concurrency"],
+        json!({"type":"integer","enum":[10,20,50,100],"default":20})
+    );
 
     let mut rules = scope_rules(&[("exact", "approved.test")]);
     rules.push(ScopeRule::new(RuleKind::ExactDomain, "excluded.approved.test", true).unwrap());

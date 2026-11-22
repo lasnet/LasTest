@@ -507,7 +507,11 @@ pub fn validate_submission(
             }
         }
         "dns.wordlist" => {
-            dnsmap::prepare(params, config, db)?;
+            let (params, _) = dnsmap::prepare(params, config, db)?;
+            anyhow::ensure!(
+                dnsmap::CONCURRENCY_OPTIONS.contains(&params.concurrency),
+                "dns.wordlist concurrency must be 10, 20, 50 or 100"
+            );
         }
         "reverse.ip" => {
             ensure_keys(

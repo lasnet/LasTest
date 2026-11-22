@@ -2019,7 +2019,7 @@
           }
           const help = {
             wordlist: "Upload additional DNS wordlists in Settings → WordList.",
-            concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
+            concurrency: "Run 10, 20, 50 or 100 dnsmap processes in parallel. Default: 20. Higher values increase DNS traffic.",
             record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Selected types are saved in the records artifact; A/AAAA are always checked for Assets.",
           };
           if (help[key] && !(subdomainSettings && key === "record_types")) {

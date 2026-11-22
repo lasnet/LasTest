@@ -161,7 +161,7 @@ impl Default for Config {
             nmap_path: None,
             subfinder_path: None,
             dnsmap_path: None,
-            dnsmap_timeout_seconds: 600,
+            dnsmap_timeout_seconds: 7200,
             subfinder_timeout_seconds: 150,
             nmap_timeout_seconds: 120,
             nmap_max_output_bytes: 4 * 1024 * 1024,
@@ -220,6 +220,11 @@ impl Config {
     }
 
     fn apply_env(&mut self) -> Result<()> {
+        if let Ok(value) = std::env::var("LASTEST_DNSMAP_TIMEOUT_SECONDS") {
+            self.dnsmap_timeout_seconds = value
+                .parse()
+                .context("LASTEST_DNSMAP_TIMEOUT_SECONDS must be a positive integer")?;
+        }
         if let Ok(value) = std::env::var("LASTEST_MAX_CONCURRENT_JOBS") {
             self.max_concurrent_jobs = value
                 .parse()

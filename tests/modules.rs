@@ -23,6 +23,18 @@ domain=$1
 [ "$5" = '1' ]
 events="$(dirname "$0")/events"
 printf 'start\n' >> "$events"
+expected_file="$(dirname "$0")/expected-shards"
+if [ -f "$expected_file" ]; then
+  read -r expected < "$expected_file"
+  while :; do
+    count=0
+    while IFS= read -r event; do
+      if [ "$event" = start ]; then count=$((count + 1)); fi
+    done < "$events"
+    if [ "$count" -ge "$expected" ]; then break; fi
+    sleep 0.02
+  done
+fi
 sleep 0.2
 while IFS= read -r word; do
   printf '%s.%s\n' "$word" "$domain"
@@ -783,26 +795,37 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
     ctx.config.dnsmap_path = Some(path);
     ctx.config.dns_server = Some(dns.addr.to_string());
     ctx.config.max_wordlist_entries = 1;
-    let words: Vec<_> = (0..32)
+    let words: Vec<_> = (0..128)
         .map(|i| format!("h{i}"))
         .chain(["excluded".into()])
         .collect();
-    for concurrency in [4, 8, 16] {
+    for concurrency in [10, 20, 50, 100] {
         std::fs::write(env.temp.path().join("events"), "").unwrap();
         std::fs::write(env.temp.path().join("candidates"), "").unwrap();
+        std::fs::write(
+            env.temp.path().join("expected-shards"),
+            format!("{concurrency}\n"),
+        )
+        .unwrap();
         let job = make_job(
             "dns.wordlist",
             json!({"domain":"allowed.test", "words":words, "concurrency":concurrency}),
         );
         validate_submission(&job.task_type, &job.params, &ctx.config, &ctx.db).unwrap();
-        let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            dns_tasks::run_wordlist(&job, &ctx),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(
             outcome.result["found"],
             json!(["h0.allowed.test", "h1.allowed.test"])
         );
         assert_eq!(outcome.result["concurrency"], concurrency);
         assert_eq!(outcome.result["engine"], "dnsmap");
-        assert_eq!(outcome.result["searched"], 33);
+        assert_eq!(outcome.result["searched"], 129);
         assert_eq!(outcome.artifacts.len(), 1);
         assert!(outcome
             .observations
@@ -822,7 +845,7 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
         assert_eq!(active, 0);
         assert_eq!(peak, concurrency);
         let candidates = std::fs::read_to_string(env.temp.path().join("candidates")).unwrap();
-        assert_eq!(candidates.lines().count(), 32);
+        assert_eq!(candidates.lines().count(), 128);
         assert!(!candidates.contains("excluded"));
         assert!(!dns
             .queries
@@ -831,9 +854,22 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
             .iter()
             .any(|(name, _)| name == "excluded.allowed.test"));
     }
+    std::fs::remove_file(env.temp.path().join("expected-shards")).unwrap();
+    // New API submissions use the new choices; stored jobs still execute with
+    // their original process count after an upgrade.
+    for concurrency in [4, 8, 16] {
+        let params = json!({"domain":"allowed.test","words":["h0"],"concurrency":concurrency});
+        assert!(validate_submission("dns.wordlist", &params, &ctx.config, &ctx.db).is_err());
+        let job = make_job("dns.wordlist", params);
+        let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
+        assert_eq!(outcome.result["concurrency"], concurrency);
+        assert_eq!(outcome.result["found"], json!(["h0.allowed.test"]));
+    }
     for params in [
         json!({"domain":"allowed.test", "concurrency":3}),
-        json!({"domain":"allowed.test", "concurrency":"8"}),
+        json!({"domain":"allowed.test", "concurrency":0}),
+        json!({"domain":"allowed.test", "concurrency":101}),
+        json!({"domain":"allowed.test", "concurrency":"20"}),
         json!({"domain":"allowed.test", "wordlist":"../../etc/passwd"}),
         json!({"domain":"allowed.test", "words":["bad\nword"]}),
         json!({"domain":"allowed.test", "words":["-x"]}),
@@ -851,7 +887,7 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
     let params: dnsmap::WordlistParams =
         serde_json::from_value(json!({"domain":"allowed.test"})).unwrap();
     assert_eq!(dnsmap::words(&params, &ctx.db).unwrap().len(), 989);
-    assert_eq!(params.concurrency, 8);
+    assert_eq!(params.concurrency, 20);
     let task = lastest::tasks::registry::task_types(&ctx.config)
         .into_iter()
         .find(|t| t.name == "dns.wordlist")
@@ -865,6 +901,46 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
     let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
     assert_eq!(outcome.result["searched"], 989);
     assert_eq!(outcome.result["wordlist"], "default");
+}
+
+#[tokio::test]
+async fn dnsmap_large_list_preparation_yields_and_honors_cancel_and_scope_revocation() {
+    use lastest::tasks::dnsmap;
+    let env = TestEnv::new();
+    let path = fake_dnsmap(env.temp.path());
+    std::fs::write(&path, "#!/bin/sh\ntouch \"$(dirname \"$0\")/launched\"\n").unwrap();
+    let words: Vec<_> = (0..50_000).map(|i| format!("h{i}")).collect();
+    let params: dnsmap::WordlistParams =
+        serde_json::from_value(json!({"domain":"allowed.test"})).unwrap();
+    for revoke_scope in [false, true] {
+        let mut ctx = task_context(
+            &env,
+            Scope::new(scope_rules(&[("tree", "allowed.test")])).unwrap(),
+            &format!("prep-{revoke_scope}"),
+        );
+        ctx.config.dnsmap_path = Some(path.clone());
+        let trigger = async {
+            // The single-thread runtime can run this only if preparation yields.
+            if revoke_scope {
+                let scope = Scope::new(scope_rules(&[("exact", "allowed.test")])).unwrap();
+                ctx.db
+                    .replace_scope(&ctx.project_id, None, &scope, "revoke", "admin", true)
+                    .unwrap();
+            } else {
+                ctx.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let (result, _) = tokio::join!(dnsmap::discover(&params, &words, &ctx), trigger);
+        let error = result.unwrap_err();
+        if revoke_scope {
+            assert!(error
+                .to_string()
+                .contains("scope changed during preparation"));
+        } else {
+            assert!(error.is::<lastest::tasks::TaskCancelled>());
+        }
+        assert!(!env.temp.path().join("launched").exists());
+    }
 }
 
 #[tokio::test]
@@ -1181,7 +1257,7 @@ async fn enumeration_modules_publish_only_address_verified_hosts_through_assets_
         ),
         (
             "dns.wordlist",
-            json!({"domain":"allowed.test","words":["v4","v6","dead","txtonly","blocked"],"concurrency":4}),
+            json!({"domain":"allowed.test","words":["v4","v6","dead","txtonly","blocked"],"concurrency":10}),
         ),
     ] {
         let mut ctx = task_context(

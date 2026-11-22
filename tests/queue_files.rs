@@ -599,3 +599,94 @@ async fn chain_stage_consumes_published_results_from_previous_job() {
         .any(|item| item.kind == "http"));
     assert_eq!(server.hits.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn equal_timestamp_jobs_are_claimed_in_submission_order() {
+    let env = TestEnv::new();
+    let (project, revision) =
+        env.project_with_scope("fifo", scope_rules(&[("tree", "allowed.test")]), true);
+    for id in ["job_z", "job_m", "job_a"] {
+        let job = env
+            .db
+            .enqueue_job(
+                &project.id,
+                "dns.records",
+                &json!({}),
+                &revision.id,
+                revision.version,
+                None,
+                "admin",
+                None,
+                None,
+            )
+            .unwrap();
+        env.db
+            .connect()
+            .unwrap()
+            .execute(
+                "UPDATE jobs SET id=?1, created_at='2026-11-22T00:00:00Z' WHERE id=?2",
+                rusqlite::params![id, job.id],
+            )
+            .unwrap();
+    }
+    for expected in ["job_z", "job_m", "job_a"] {
+        let claim = env.db.claim_next_job("fifo-worker", 30).unwrap().unwrap();
+        assert_eq!(
+            claim.job.id, expected,
+            "equal timestamps must not sort random UUIDs"
+        );
+    }
+}
+
+#[test]
+fn racing_workers_claim_each_job_once() {
+    let env = TestEnv::new();
+    let (project, revision) =
+        env.project_with_scope("claim-race", scope_rules(&[("tree", "allowed.test")]), true);
+    let mut expected = std::collections::HashSet::new();
+    for _ in 0..24 {
+        let job = env
+            .db
+            .enqueue_job(
+                &project.id,
+                "dns.records",
+                &json!({}),
+                &revision.id,
+                revision.version,
+                None,
+                "admin",
+                None,
+                None,
+            )
+            .unwrap();
+        expected.insert(job.id);
+    }
+    let barrier = Arc::new(std::sync::Barrier::new(4));
+    let claimed = std::thread::scope(|scope| {
+        let handles = (0..4)
+            .map(|i| {
+                let db = env.db.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    let mut ids = Vec::new();
+                    while let Some(claim) = db.claim_next_job(&format!("racing-{i}"), 30).unwrap() {
+                        ids.push(claim.job.id);
+                    }
+                    ids
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(claimed.len(), 24);
+    assert_eq!(
+        claimed
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>(),
+        expected
+    );
+}

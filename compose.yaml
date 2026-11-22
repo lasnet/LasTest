@@ -24,6 +24,7 @@ services:
       LASTEST_NMAP_PATH: "${LASTEST_NMAP_PATH:-}"
       LASTEST_SUBFINDER_PATH: "${LASTEST_SUBFINDER_PATH:-/usr/local/bin/subfinder}"
       LASTEST_DNSMAP_PATH: "${LASTEST_DNSMAP_PATH:-/usr/local/bin/dnsmap}"
+      LASTEST_DNSMAP_TIMEOUT_SECONDS: "${LASTEST_DNSMAP_TIMEOUT_SECONDS:-7200}"
     ports:
       - target: 8080
         published: "${LASTEST_PORT:-8080}"
@@ -64,6 +65,7 @@ services:
       LASTEST_NMAP_PATH: "${LASTEST_NMAP_PATH:-}"
       LASTEST_SUBFINDER_PATH: "${LASTEST_SUBFINDER_PATH:-/usr/local/bin/subfinder}"
       LASTEST_DNSMAP_PATH: "${LASTEST_DNSMAP_PATH:-/usr/local/bin/dnsmap}"
+      LASTEST_DNSMAP_TIMEOUT_SECONDS: "${LASTEST_DNSMAP_TIMEOUT_SECONDS:-7200}"
     volumes:
       - lastest-data:/data
     depends_on:

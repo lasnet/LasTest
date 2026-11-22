@@ -276,6 +276,8 @@ impl Db {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Stage jobs wait until every earlier stage in the chain is terminal.
+        // Timestamps have second precision; rowid preserves submission order
+        // within a second instead of sorting random UUIDs.
         let candidate: Option<String> = tx
             .query_row(
                 "SELECT j.id FROM jobs j
@@ -286,7 +288,7 @@ impl Db {
                          AND p.chain_order < j.chain_order
                          AND p.status IN ('queued','running')
                    ))
-                 ORDER BY j.created_at, j.id LIMIT 1",
+                 ORDER BY j.created_at, j.rowid LIMIT 1",
                 [],
                 |row| row.get(0),
             )

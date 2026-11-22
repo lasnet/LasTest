@@ -7,11 +7,21 @@ use std::net::IpAddr;
 
 pub(crate) fn allows_dns(ctx: &TaskContext, domain: &str, host: &str) -> Result<bool> {
     let current = ctx.current_scope()?;
-    Ok((host == domain || host.ends_with(&format!(".{domain}")))
-        && ctx.scope.snapshot.allows_host(domain)
+    Ok(allows_dns_in(&ctx.scope.snapshot, &current, domain, host))
+}
+
+/// Evaluate many names against one scope read, without opening SQLite per name.
+pub(crate) fn allows_dns_in(
+    snapshot: &crate::scope::Scope,
+    current: &crate::scope::Scope,
+    domain: &str,
+    host: &str,
+) -> bool {
+    (host == domain || host.ends_with(&format!(".{domain}")))
+        && snapshot.allows_host(domain)
         && current.allows_host(domain)
-        && !ctx.scope.snapshot.exclusion_matches_host(host)
-        && !current.exclusion_matches_host(host))
+        && !snapshot.exclusion_matches_host(host)
+        && !current.exclusion_matches_host(host)
 }
 
 /// DNS verification permission for an already discovered candidate.

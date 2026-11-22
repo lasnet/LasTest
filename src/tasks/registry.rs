@@ -122,7 +122,7 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
                 "properties": {
                     "domain": {"type": "string"},
                     "wordlist": {"type": "string", "enum": ["default"], "default": "default"},
-                    "concurrency": {"type": "integer", "enum": [4,8,16], "default": 8},
+                    "concurrency": {"type": "integer", "enum": crate::tasks::dnsmap::CONCURRENCY_OPTIONS, "default": crate::tasks::dnsmap::DEFAULT_CONCURRENCY},
                     "words": {"type": "array", "items": {"type": "string"}}
                 },
                 "required": ["domain"],

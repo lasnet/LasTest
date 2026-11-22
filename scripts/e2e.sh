@@ -115,7 +115,7 @@ fi
 
 echo "[6/9] run dnsmap against the isolated API's DNS alias"
 DNS_JOB_JSON="$(cli job submit --project "$PROJECT_ID" --task-type dns.wordlist \
-  --params '{"domain":"lastest.test","words":["api"],"concurrency":4}' \
+  --params '{"domain":"lastest.test","words":["api"],"concurrency":10}' \
   --idempotency-key e2e-dnsmap-1)"
 DNS_JOB_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["id"])' <<<"$DNS_JOB_JSON")"
 DNS_STATUS="queued"
@@ -130,7 +130,7 @@ if [[ "$DNS_STATUS" != "succeeded" ]]; then
   docker logs "$WORKER" >&2 || true
   exit 1
 fi
-python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; r=j["result"]; assert r["engine"]=="dnsmap" and r["concurrency"]==4 and r["found"]==["api.lastest.test"]; assert j["artifacts"]' <<<"$DNS_STATUS_JSON"
+python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; r=j["result"]; assert r["engine"]=="dnsmap" and r["concurrency"]==10 and r["found"]==["api.lastest.test"]; assert j["artifacts"]' <<<"$DNS_STATUS_JSON"
 
 echo "[7/9] dashboard and report use persisted observations"
 cli report export --project "$PROJECT_ID" --format json --output /tmp/report.json
@@ -156,7 +156,7 @@ cli job status --id "$DNS_JOB_ID" | python3 -c 'import json,sys; j=json.load(sys
 
 echo "[9/9] verify runtime excludes Go/Python/compilers and uses a non-root user"
 docker run --rm --entrypoint /usr/local/bin/subfinder "$LASTEST_IMAGE" -version
-cli task-types | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["limitations"]["max_concurrent_jobs"]==4; items=d["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"])'
+cli task-types | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["limitations"]["max_concurrent_jobs"]==4; items=d["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"]); dns=next(item for item in items if item["name"]=="dns.wordlist"); assert dns["params_schema"]["properties"]["concurrency"]=={"type":"integer","enum":[10,20,50,100],"default":20}; assert dns["limits"]["timeout_seconds"]==7200'
 docker run --rm --entrypoint sh "$LASTEST_IMAGE" -eu -c \
   '! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'
 IMAGE_USER="$(docker image inspect --format '{{.Config.User}}' "$LASTEST_IMAGE")"
