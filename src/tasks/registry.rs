@@ -147,7 +147,11 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
                     "sources": {
                         "type": "array",
                         "items": {"enum": ["ptr","shodan_internetdb","censys"]},
-                        "description": "Select exactly the passive sources; an empty list is rejected"
+                        "description": "Select the passive sources; an empty list is rejected"
+                    },
+                    "use_configured_censys": {
+                        "type": "boolean",
+                        "description": "Also use Censys when installation credentials are available"
                     },
                     "providers": {
                         "type": "array",

@@ -423,18 +423,48 @@
         </section>
         <section id="settings-api" class="panel" role="tabpanel" aria-labelledby="settings-tab-api" tabindex="0" hidden>
           <h2>Provider credentials</h2>
-          <p class="muted">Manage API keys in the server configuration.</p>
+          <p class="muted">Configured keys are used automatically by the applications listed below.</p>
           <div id="settings-providers" aria-live="polite"></div>
         </section>
         <section id="settings-wordlist" class="panel" role="tabpanel" aria-labelledby="settings-tab-wordlist" tabindex="0" hidden>
           <h2>Word lists</h2>
-          <p class="muted">Built-in lists included with LasTest.</p>
           <div id="settings-wordlists" aria-live="polite"></div>
+          <form id="wordlist-form" class="wordlist-form" aria-labelledby="wordlist-upload-title">
+            <h3 id="wordlist-upload-title">Upload a DNS wordlist</h3>
+            <div class="wordlist-fields">
+              <div class="field">
+                <label for="wordlist-name">Name</label>
+                <input id="wordlist-name" maxlength="80" required>
+              </div>
+              <div class="field">
+                <label for="wordlist-file">TXT file</label>
+                <input id="wordlist-file" type="file" accept=".txt,text/plain" required aria-describedby="wordlist-file-hint">
+                <p id="wordlist-file-hint" class="muted field-hint">UTF-8 text, one DNS label or prefix per line. Up to 1 MiB.</p>
+              </div>
+            </div>
+            <button id="wordlist-upload-button" type="submit" class="primary">Upload wordlist</button>
+            <p id="wordlist-upload-error" class="error" role="alert"></p>
+          </form>
         </section>
       </section>
     </main>
   </div>
 
+  <dialog id="provider-key-dialog" aria-labelledby="provider-key-title">
+    <form id="provider-key-form">
+      <h2 id="provider-key-title"></h2>
+      <div class="field">
+        <label for="provider-key">API key</label>
+        <input id="provider-key" type="password" autocomplete="off" spellcheck="false" minlength="8" maxlength="2048" required autofocus aria-describedby="provider-key-hint">
+        <p id="provider-key-hint" class="muted field-hint"></p>
+      </div>
+      <p id="provider-key-error" class="error" role="alert"></p>
+      <div class="button-row">
+        <button id="cancel-provider-key" type="button">Cancel</button>
+        <button id="save-provider-key" type="submit" class="primary">Save key</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="cancel-scope-dialog" aria-labelledby="cancel-scope-title" aria-describedby="cancel-scope-description">
     <form method="dialog">
       <h2 id="cancel-scope-title">Cancel changes?</h2>

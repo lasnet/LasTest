@@ -45,8 +45,11 @@
 | `POST /auth/login` | без auth | cookie или CLI token |
 | `POST /auth/logout` | auth | отзыв текущей сессии |
 | `GET /auth/me` | auth | пользователь и роль |
-| `GET /task-types` | viewer | типизированный каталог, доступность, лимиты, web-правила, исключения |
-| `GET /providers` | viewer | read-only интеграции: `configured`, `requires_key`, реальный режим Censys, причина; без ключей |
+| `GET /task-types` | viewer | типизированный каталог, доступность, `dns_wordlists` (ID, имя, число слов), лимиты, web-правила, исключения |
+| `GET /providers` | viewer | состояние интеграций и режим Censys |
+| `GET /settings/providers` | admin | провайдеры, приложения, состояние и последние четыре символа сохранённых ключей |
+| `PUT /settings/providers/{id}` | admin | `{"key":"..."}` добавляет или заменяет ключ, возвращает `204` |
+| `POST /settings/wordlists` | admin | `{"name":"Internal DNS","contents":"www\napi\n"}` создаёт словарь, возвращает `201` и метаданные |
 | `GET /projects` | viewer | пагинация проектов |
 | `POST /projects` | analyst | создать проект и черновик scope |
 | `GET /projects/{id}` | viewer | проект, текущий scope, история ревизий |
@@ -157,7 +160,7 @@ Idempotency-Key: optional
 
 Для `tcp.connect`, `nmap.profile`, `reverse.ip` с ручными целями нужны явно разрешённые IP/CIDR. HTTP к разрешённому DNS-имени привязывается к проверенному IP с сохранением `Host`/SNI; редиректы проверяются отдельно; повторное разрешение имени после проверки не выполняется.
 
-`dns.wordlist` использует dnsmap: `{"domain":"example.com","wordlist":"default","concurrency":8}`. Доступны 4, 8 или 16 параллельных исполнителей, по умолчанию 8. `default` содержит 989 слов; `words` остаётся совместимым API-входом и переопределяет содержимое списка. Лимит `max_wordlist_entries` к этой задаче не применяется. Неизвестные списки, неверная параллельность и некорректные DNS-метки отклоняются до постановки в очередь. Формат результата v1 сохраняет `domain`, `found`, `wildcard_addresses`, `searched` и дополняется `engine`, `wordlist`, `concurrency`. В Assets записываются только разрешённые имена с A/AAAA и их IP; JSON-артефакт доступен обычными маршрутами задания. Лимит 50 доменов снят для CT, Subfinder и из каталога цепочки.
+`dns.wordlist` использует dnsmap: `{"domain":"example.com","wordlist":"default","concurrency":8}`. Доступны 4, 8 или 16 параллельных исполнителей, по умолчанию 8. `default` содержит 989 слов. Для пользовательского словаря передайте ID из `dns_wordlists`. Список хранится в UTF-8, на каждой непустой строке одна DNS-метка или префикс; регистр и дубли нормализуются, предел TXT — 1 МиБ. `words` остаётся совместимым API-входом и переопределяет содержимое списка. Лимит `max_wordlist_entries` к этой задаче не применяется. Неизвестные списки, неверная параллельность и некорректные DNS-метки отклоняются до постановки в очередь. Формат результата v1 сохраняет `domain`, `found`, `wildcard_addresses`, `searched` и дополняется `engine`, `wordlist`, `concurrency`. В Assets записываются только разрешённые имена с A/AAAA и их IP; JSON-артефакт доступен обычными маршрутами задания. Лимит 50 доменов снят для CT, Subfinder и из каталога цепочки.
 
 ## Ответ задачи
 
@@ -183,7 +186,7 @@ Idempotency-Key: optional
 
 ### Пресет Asset Discovery
 
-Интерфейс передаёт `{"preset":"asset_discovery","asset_ids":["ast_..."],"sources":["ptr","shodan_internetdb"],"http_enrichment":false}`. Сервер получает IP из выбранных Assets; стадии enrich/classify обрабатывают исходные Assets, включая IP-only, и committed-кандидатов текущей цепочки. Если PTR/провайдер не нашёл кандидатов, исходные Assets всё равно обогащаются и классифицируются. Одновременная передача `ips` и `asset_ids` запрещена.
+Интерфейс передаёт `{"preset":"asset_discovery","asset_ids":["ast_..."],"sources":["ptr","shodan_internetdb"],"use_configured_censys":true,"http_enrichment":false}`. Сервер получает IP из выбранных Assets; стадии enrich/classify обрабатывают исходные Assets, включая IP-only, и committed-кандидатов текущей цепочки. Если PTR/провайдер не нашёл кандидатов, исходные Assets всё равно обогащаются и классифицируются. Одновременная передача `ips` и `asset_ids` запрещена.
 
 Совместимый низкоуровневый вариант:
 
@@ -191,7 +194,7 @@ Idempotency-Key: optional
 {"preset":"asset_discovery","ips":["203.0.113.10"],"sources":["ptr","shodan_internetdb"],"http_enrichment":false,"idempotency_key":"disc-1"}
 ```
 
-Если `ips` пуст, backend берёт явные IP-записи утверждённого Scope; CIDR в UI не разворачивается. Создаются стадии `reverse.ip → assets.enrich → assets.classify` с явными `input_refs`: enrich читает только committed output reverse.ip этого запуска, classify — reverse.ip и assets.enrich. Отсутствие `preset` сохраняет прежний All in one. Неизвестный preset и пустой `sources` отклоняются. Значения `ips`, `sources` и `http_enrichment` фиксируются в запуске; scope snapshot закрепляется действующим механизмом jobs. В `GET /chains/{id}` стадии содержат `input_refs`, а результат каждой стадии — счётчики и снимок входов.
+Если `ips` пуст, backend берёт явные IP-записи утверждённого Scope; CIDR в UI не разворачивается. Создаются стадии `reverse.ip → assets.enrich → assets.classify` с явными `input_refs`: enrich читает только committed output reverse.ip этого запуска, classify — reverse.ip и assets.enrich. Отсутствие `preset` сохраняет прежний All in one. Неизвестный preset и пустой `sources` отклоняются. При явном `sources` можно передать `use_configured_censys: true`, чтобы worker дополнительно подключал настроенный Censys. Без `sources` worker использует PTR, Shodan InternetDB и Censys при наличии ключа. Значения `ips`, `sources` и `http_enrichment` фиксируются в запуске; scope snapshot закрепляется действующим механизмом jobs. В `GET /chains/{id}` стадии содержат `input_refs`, а результат каждой стадии — счётчики и снимок входов.
 
 ## Dashboard и отчёты
 

@@ -794,7 +794,7 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
             "dns.wordlist",
             json!({"domain":"allowed.test", "words":words, "concurrency":concurrency}),
         );
-        validate_submission(&job.task_type, &job.params, &ctx.config).unwrap();
+        validate_submission(&job.task_type, &job.params, &ctx.config, &ctx.db).unwrap();
         let outcome = dns_tasks::run_wordlist(&job, &ctx).await.unwrap();
         assert_eq!(
             outcome.result["found"],
@@ -838,18 +838,19 @@ async fn dnsmap_named_list_concurrency_scope_and_legacy_parameters() {
         json!({"domain":"allowed.test", "words":["bad\nword"]}),
         json!({"domain":"allowed.test", "words":["-x"]}),
     ] {
-        assert!(validate_submission("dns.wordlist", &params, &ctx.config).is_err());
+        assert!(validate_submission("dns.wordlist", &params, &ctx.config, &ctx.db).is_err());
     }
     let many: Vec<_> = (0..5001).map(|i| format!("h{i}")).collect();
     validate_submission(
         "dns.wordlist",
         &json!({"domain":"allowed.test", "words":many}),
         &ctx.config,
+        &ctx.db,
     )
     .unwrap();
     let params: dnsmap::WordlistParams =
         serde_json::from_value(json!({"domain":"allowed.test"})).unwrap();
-    assert_eq!(dnsmap::words(&params).len(), 989);
+    assert_eq!(dnsmap::words(&params, &ctx.db).unwrap().len(), 989);
     assert_eq!(params.concurrency, 8);
     let task = lastest::tasks::registry::task_types(&ctx.config)
         .into_iter()
@@ -881,7 +882,7 @@ async fn dnsmap_stops_children_on_timeout_cancel_scope_change_and_output_overflo
     ctx.config.dnsmap_timeout_seconds = 1;
     let params: dnsmap::WordlistParams =
         serde_json::from_value(json!({"domain":"allowed.test", "words":["www"]})).unwrap();
-    let words = dnsmap::words(&params);
+    let words = dnsmap::words(&params, &ctx.db).unwrap();
     let error = dnsmap::discover(&params, &words, &ctx).await.unwrap_err();
     assert!(error.to_string().contains("timeout"));
     ctx.config.dnsmap_timeout_seconds = 30;
@@ -917,7 +918,7 @@ async fn dnsmap_stops_children_on_timeout_cancel_scope_change_and_output_overflo
     ctx.config.max_artifact_bytes = 128;
     let params: dnsmap::WordlistParams =
         serde_json::from_value(json!({"domain":"allowed.test", "words":["api"]})).unwrap();
-    let error = dnsmap::discover(&params, &dnsmap::words(&params), &ctx)
+    let error = dnsmap::discover(&params, &dnsmap::words(&params, &ctx.db).unwrap(), &ctx)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("artifact limit"));
@@ -1192,7 +1193,7 @@ async fn enumeration_modules_publish_only_address_verified_hosts_through_assets_
         ctx.config.certspotter_url = format!("http://127.0.0.1:{}/v1/issuances", ct.addr.port());
         ctx.config.subfinder_path = Some(subfinder.clone());
         ctx.config.dnsmap_path = Some(dnsmap.clone());
-        lastest::tasks::validate_submission(task, &params, &ctx.config).unwrap();
+        lastest::tasks::validate_submission(task, &params, &ctx.config, &ctx.db).unwrap();
         let revision = ctx.db.current_scope(&ctx.project_id).unwrap().unwrap();
         let queued = ctx
             .db

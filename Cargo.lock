@@ -1152,6 +1152,7 @@ dependencies = [
  "ipnet",
  "rand 0.9.5",
  "reqwest",
+ "ring",
  "roxmltree",
  "rpassword",
  "rusqlite",

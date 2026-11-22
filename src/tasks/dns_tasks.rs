@@ -29,6 +29,8 @@ struct ReverseParams {
     providers: Vec<String>,
     #[serde(default)]
     sources: Option<Vec<String>>,
+    #[serde(default)]
+    use_configured_censys: bool,
 }
 
 fn push_url_segment(base: &str, segment: &str) -> String {
@@ -250,11 +252,9 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
 }
 
 pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
-    crate::tasks::dnsmap::validate(&job.params, &ctx.config)?;
-    let params: crate::tasks::dnsmap::WordlistParams = parse_params(&job.params)?;
+    let (params, words) = crate::tasks::dnsmap::prepare(&job.params, &ctx.config, &ctx.db)?;
     let domain = normalize_domain(&params.domain)?;
     ctx.authorize_host(&domain)?;
-    let words = crate::tasks::dnsmap::words(&params);
     let dns = ctx.dns()?;
     let mut outcome = TaskOutcome::new();
     outcome.target(words.len());
@@ -385,7 +385,7 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
     if ips.is_empty() || ips.len() > 128 {
         anyhow::bail!("reverse.ip accepts 1-128 explicit addresses");
     }
-    let selected_sources: Vec<String> = match &params.sources {
+    let mut selected_sources: Vec<String> = match &params.sources {
         Some(sources) => {
             if sources.is_empty() {
                 anyhow::bail!("reverse.ip sources must not be empty");
@@ -409,6 +409,19 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
             selected
         }
     };
+    let includes_censys = selected_sources.iter().any(|source| source == "censys");
+    let use_configured_censys = params.use_configured_censys
+        || (params.sources.is_none() && job.params.get("providers").is_none());
+    let saved_pat = if includes_censys || use_configured_censys {
+        crate::provider_settings::read_key(&ctx.db, &ctx.config, "censys")?
+    } else {
+        None
+    };
+    let censys_pat = saved_pat.as_deref().or(ctx.config.censys_pat.as_deref());
+    let integration = ctx.config.censys_integration_for(saved_pat.is_some());
+    if use_configured_censys && !includes_censys && integration.configured {
+        selected_sources.push("censys".to_owned());
+    }
     let use_ptr = selected_sources.iter().any(|source| source == "ptr");
     let selected_providers: Vec<String> = selected_sources
         .iter()
@@ -522,7 +535,6 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
         for provider_name in &selected_providers {
             ctx.ensure_active()?;
             if provider_name == "censys" {
-                let integration = ctx.config.censys_integration();
                 if !integration.configured {
                     summary.sources.push("censys".to_string());
                     provider_status.push(json!({
@@ -539,7 +551,7 @@ pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                     match integration.mode {
                         crate::config::CensysMode::Platform => {
                             let url = push_url_segment(&integration.endpoint, &ip.to_string());
-                            let pat = ctx.config.censys_pat.clone().unwrap_or_default();
+                            let pat = censys_pat.unwrap_or_default().to_owned();
                             let mut pairs = vec![
                                 ("Authorization".to_string(), format!("Bearer {pat}")),
                                 (

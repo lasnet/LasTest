@@ -2,6 +2,7 @@ use crate::api::projects::resolve_project;
 use crate::api::{authenticate, paged, require, validate_origin, ApiError, ApiResult, AppState};
 use crate::db::jobs::EnqueueError;
 use crate::domain::{Job, JobStatus, Role};
+use crate::provider_settings;
 use crate::tasks::{self, registry};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -49,6 +50,8 @@ pub struct ChainBody {
     pub asset_ids: Option<Vec<String>>,
     #[serde(default)]
     pub sources: Option<Vec<String>>,
+    #[serde(default)]
+    pub use_configured_censys: bool,
     #[serde(default)]
     pub http_enrichment: bool,
     #[serde(default)]
@@ -106,10 +109,22 @@ pub async fn task_types(
 ) -> ApiResult<Json<Value>> {
     let session = authenticate(&state, &headers)?;
     require(&session, Role::Viewer)?;
+    let mut wordlists = vec![crate::db::settings::Wordlist {
+        id: "default".to_owned(),
+        name: "default".to_owned(),
+        entries: tasks::dnsmap::DEFAULT_WORDLIST.lines().count(),
+    }];
+    wordlists.extend(state.db.dns_wordlists().map_err(ApiError::internal)?);
+    let mut types = registry::task_types(&state.config);
+    if let Some(dnsmap) = types.iter_mut().find(|task| task.name == "dns.wordlist") {
+        dnsmap.params_schema["properties"]["wordlist"]["enum"] =
+            json!(wordlists.iter().map(|list| &list.id).collect::<Vec<_>>());
+    }
     Ok(Json(json!({
-        "task_types": registry::task_types(&state.config),
+        "task_types": types,
         "web_check_rules": crate::tasks::web_checks::rules_catalog(),
-        "providers": state.config.provider_catalog(),
+        "providers": provider_catalog(&state)?,
+        "dns_wordlists": wordlists,
         "excluded": [
             "full Nuclei template language and template catalog",
             "browser/JavaScript crawling",
@@ -122,6 +137,7 @@ pub async fn task_types(
             "max_queue_targets": state.config.max_queue_targets,
             "http_timeout_seconds": state.config.http_timeout_seconds,
             "max_body_bytes": state.config.max_body_bytes,
+            "max_dns_wordlist_bytes": tasks::dnsmap::MAX_WORDLIST_BYTES,
             "tls_expiry_warning_days": state.config.tls_expiry_warning_days
         }
     })))
@@ -134,10 +150,16 @@ pub async fn providers(
     let session = authenticate(&state, &headers)?;
     require(&session, Role::Viewer)?;
     Ok(Json(json!({
-        "providers": state.config.provider_catalog(),
+        "providers": provider_catalog(&state)?,
         "http_enrichment_default": false,
         "note": "Provider credentials belong to the LasTest installation and are never accepted in task params or project settings."
     })))
+}
+
+fn provider_catalog(state: &AppState) -> ApiResult<Value> {
+    let saved_pat =
+        provider_settings::has_saved_censys_pat(&state.db).map_err(ApiError::internal)?;
+    Ok(state.config.provider_catalog_with_saved_pat(saved_pat))
 }
 
 pub async fn list_jobs(
@@ -221,7 +243,7 @@ pub async fn submit_job(
     if let Some(params) = public_params.as_object_mut() {
         params.remove(tasks::asset_input::INPUT_KEY);
     }
-    tasks::validate_submission(&body.task_type, &public_params, &state.config)
+    tasks::validate_submission(&body.task_type, &public_params, &state.config, &state.db)
         .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
     if body.asset_ids.is_none() {
         tasks::validate_scope_targets(&body.task_type, &body.params, &scope.scope, &state.config)
@@ -324,7 +346,7 @@ fn selected_params(
                 .map_err(|error| ApiError::bad_request("invalid_params", error.to_string()))?;
         }
     }
-    tasks::validate_submission(task, &params, &state.config)
+    tasks::validate_submission(task, &params, &state.config, &state.db)
         .map_err(|error| ApiError::bad_request("invalid_params", error.to_string()))?;
     tasks::validate_scope_targets(task, &params, &expanded, &state.config)
         .map_err(|error| ApiError::bad_request("invalid_target", error.to_string()))?;
@@ -385,6 +407,7 @@ pub async fn submit_chain(
         "targets": body.targets,
         "ips": body.ips,
         "sources": body.sources,
+        "use_configured_censys": body.use_configured_censys,
         "http_enrichment": body.http_enrichment,
         "preset": body.preset,
         "asset_ids": body.asset_ids,
@@ -441,16 +464,25 @@ async fn submit_chain_internal(
         ));
     }
     let stage_inputs: Vec<(String, Value, Vec<i64>)>;
+    let mut implicit_sources = false;
     let run_name;
     if preset == Some("asset_discovery") {
-        let sources: Vec<String> = params
+        let sources: Option<Vec<String>> = params
             .get("sources")
             .filter(|value| !value.is_null())
             .cloned()
             .map(serde_json::from_value)
             .transpose()
-            .map_err(|_| ApiError::bad_request("invalid_params", "sources must be strings"))?
-            .unwrap_or_else(|| vec!["ptr".to_string(), "shodan_internetdb".to_string()]);
+            .map_err(|_| ApiError::bad_request("invalid_params", "sources must be strings"))?;
+        let use_censys = match params.get("use_configured_censys") {
+            Some(value) => value.as_bool().ok_or_else(|| {
+                ApiError::bad_request("invalid_params", "use_configured_censys must be a boolean")
+            })?,
+            None => false,
+        };
+        implicit_sources = sources.is_none() && !use_censys;
+        let sources =
+            sources.unwrap_or_else(|| vec!["ptr".to_string(), "shodan_internetdb".to_string()]);
         if sources.is_empty() {
             return Err(ApiError::bad_request(
                 "invalid_params",
@@ -492,6 +524,10 @@ async fn submit_chain_internal(
                 "Asset Discovery needs explicit IP address records in the approved Scope",
             ));
         }
+        let mut reverse = json!({"sources": sources});
+        if use_censys || implicit_sources {
+            reverse["use_configured_censys"] = json!(true);
+        }
         let reverse_params = if let Some(ids) = &selected_ids {
             if !ips.is_empty() {
                 return Err(ApiError::bad_request(
@@ -503,17 +539,17 @@ async fn submit_chain_internal(
                 state,
                 &project.id,
                 "reverse.ip",
-                &json!({"sources":sources}),
+                &reverse,
                 ids,
                 &scope.scope,
             )?
         } else {
-            let params = json!({"ips": ips, "sources": sources});
-            tasks::validate_submission("reverse.ip", &params, &state.config)
+            reverse["ips"] = json!(ips);
+            tasks::validate_submission("reverse.ip", &reverse, &state.config, &state.db)
                 .map_err(|err| ApiError::bad_request("invalid_params", format!("{err:#}")))?;
-            tasks::validate_scope_targets("reverse.ip", &params, &scope.scope, &state.config)
+            tasks::validate_scope_targets("reverse.ip", &reverse, &scope.scope, &state.config)
                 .map_err(|err| ApiError::bad_request("invalid_target", format!("{err:#}")))?;
-            params
+            reverse
         };
         let http_enrichment = params
             .get("http_enrichment")
@@ -611,7 +647,20 @@ async fn submit_chain_internal(
                 || jobs
                     .iter()
                     .zip(&stage_inputs)
-                    .any(|(job, (task, params, _))| job.task_type != *task || job.params != *params)
+                    .any(|(job, (task, params, _))| {
+                        if job.task_type != *task {
+                            return true;
+                        }
+                        if implicit_sources
+                            && task == "reverse.ip"
+                            && job.params.get("use_configured_censys").is_none()
+                        {
+                            let mut previous = job.params.clone();
+                            previous["use_configured_censys"] = json!(true);
+                            return previous != *params;
+                        }
+                        job.params != *params
+                    })
             {
                 return Err(ApiError::conflict(
                     "idempotency_conflict",

@@ -8,6 +8,7 @@ pub mod db;
 pub mod domain;
 pub mod import;
 pub mod net;
+mod provider_settings;
 pub mod report;
 pub mod scope;
 pub mod tasks;

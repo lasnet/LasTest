@@ -484,7 +484,12 @@ pub(crate) fn string_list(params: &Value, key: &str) -> Result<Vec<String>> {
 }
 
 /// Validation performed at submission time, before a job enters the queue.
-pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> Result<()> {
+pub fn validate_submission(
+    task_type: &str,
+    params: &Value,
+    config: &Config,
+    db: &Db,
+) -> Result<()> {
     match task_type {
         "subdomains.subfinder" => subfinder::validate(params, config)?,
         "subdomains.discover" => {
@@ -501,9 +506,20 @@ pub fn validate_submission(task_type: &str, params: &Value, config: &Config) -> 
                 crate::net::dns::record_type(&record_type)?;
             }
         }
-        "dns.wordlist" => dnsmap::validate(params, config)?,
+        "dns.wordlist" => {
+            dnsmap::prepare(params, config, db)?;
+        }
         "reverse.ip" => {
-            ensure_keys(params, &["ips", "providers", "sources"])?;
+            ensure_keys(
+                params,
+                &["ips", "providers", "sources", "use_configured_censys"],
+            )?;
+            if let Some(preference) = params.get("use_configured_censys") {
+                anyhow::ensure!(
+                    preference.is_boolean(),
+                    "use_configured_censys must be a boolean"
+                );
+            }
             let ips = string_list(params, "ips")?;
             if ips.is_empty() || ips.len() > 128 {
                 anyhow::bail!("reverse.ip requires 1-128 explicit IP addresses");

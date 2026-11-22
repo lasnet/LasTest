@@ -1,5 +1,6 @@
 //! dnsmap 0.36 adapter. Partition wordlists rather than assuming a thread flag.
 use crate::config::Config;
+use crate::db::Db;
 use crate::scope::normalize_domain;
 use crate::tasks::{discovery::allows_dns, parse_params, TaskContext};
 use anyhow::{Context, Result};
@@ -11,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::task::JoinSet;
 
 pub const DEFAULT_WORDLIST: &str = include_str!("wordlists/default.txt");
+pub const MAX_WORDLIST_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,14 +42,15 @@ pub fn available(config: &Config) -> bool {
         .is_some_and(|path| path.is_file())
 }
 
-pub fn validate(value: &serde_json::Value, config: &Config) -> Result<()> {
+pub fn prepare(
+    value: &serde_json::Value,
+    config: &Config,
+    db: &Db,
+) -> Result<(WordlistParams, Vec<String>)> {
     let params: WordlistParams = parse_params(value)?;
     let domain = normalize_domain(&params.domain)?;
     if !matches!(params.concurrency, 4 | 8 | 16) {
         anyhow::bail!("dns.wordlist concurrency must be 4, 8 or 16");
-    }
-    if params.wordlist != "default" {
-        anyhow::bail!("unknown DNS wordlist: {}", params.wordlist);
     }
     if domain.len() > 197 {
         anyhow::bail!("dnsmap domain exceeds its 197-byte input capacity");
@@ -58,13 +61,20 @@ pub fn validate(value: &serde_json::Value, config: &Config) -> Result<()> {
     {
         anyhow::bail!("dnsmap requires a DNS name with a 2-13 byte top-level label");
     }
-    for word in &params.words {
-        candidate(word, &domain)?;
-    }
     if !available(config) {
         anyhow::bail!("dnsmap is unavailable: configure LASTEST_DNSMAP_PATH");
     }
-    Ok(())
+    let words = words(&params, db)?;
+    // Validate the exact combination since dnsmap also limits the full name.
+    let validation_words = if params.words.is_empty() {
+        &words
+    } else {
+        &params.words
+    };
+    for word in validation_words {
+        candidate(word, &domain)?;
+    }
+    Ok((params, words))
 }
 
 fn candidate(word: &str, domain: &str) -> Result<String> {
@@ -83,17 +93,50 @@ fn candidate(word: &str, domain: &str) -> Result<String> {
     Ok(host)
 }
 
-pub fn words(params: &WordlistParams) -> Vec<String> {
-    let input: Vec<String> = if params.words.is_empty() {
-        DEFAULT_WORDLIST.lines().map(str::to_owned).collect()
+pub fn words(params: &WordlistParams, db: &Db) -> Result<Vec<String>> {
+    let stored;
+    let named = if params.wordlist == "default" {
+        DEFAULT_WORDLIST
     } else {
-        params.words.clone()
+        stored = db
+            .dns_wordlist_contents(&params.wordlist)?
+            .with_context(|| format!("unknown DNS wordlist: {}", params.wordlist))?;
+        &stored
     };
+    let words = if params.words.is_empty() {
+        normalize_words(named.lines())
+    } else {
+        normalize_words(params.words.iter().map(String::as_str))
+    };
+    Ok(words)
+}
+
+pub fn parse_wordlist(contents: &str) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        contents.len() <= MAX_WORDLIST_BYTES,
+        "TXT file must be at most 1 MiB"
+    );
+    let contents = contents.trim_start_matches('\u{feff}');
+    for (index, line) in contents.lines().enumerate() {
+        if !line.trim().is_empty() {
+            candidate(line, "upload.test").map_err(|_| {
+                anyhow::anyhow!(
+                    "line {} must contain one valid DNS label or prefix",
+                    index + 1
+                )
+            })?;
+        }
+    }
+    let words = normalize_words(contents.lines());
+    anyhow::ensure!(!words.is_empty(), "TXT file must contain at least one word");
+    Ok(words)
+}
+
+fn normalize_words<'a>(input: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut seen = HashSet::new();
     input
-        .into_iter()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+        .map(|word| word.trim().to_ascii_lowercase())
+        .filter(|word| !word.is_empty() && seen.insert(word.clone()))
         .collect()
 }
 

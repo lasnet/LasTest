@@ -512,7 +512,11 @@ impl Config {
     /// configuration. A future Settings UI can replace the source without
     /// changing task implementations.
     pub fn censys_integration(&self) -> CensysIntegration {
-        let has_pat = self.censys_pat.is_some();
+        self.censys_integration_for(false)
+    }
+
+    pub(crate) fn censys_integration_for(&self, saved_pat: bool) -> CensysIntegration {
+        let has_pat = saved_pat || self.censys_pat.is_some();
         let has_id = self.censys_api_id.is_some();
         let has_secret = self.censys_api_secret.is_some();
         if has_pat {
@@ -563,7 +567,11 @@ impl Config {
     }
 
     pub fn provider_catalog(&self) -> serde_json::Value {
-        let censys = self.censys_integration();
+        self.provider_catalog_with_saved_pat(false)
+    }
+
+    pub(crate) fn provider_catalog_with_saved_pat(&self, saved_pat: bool) -> serde_json::Value {
+        let censys = self.censys_integration_for(saved_pat);
         serde_json::json!({
             "ptr": {
                 "configured": true,

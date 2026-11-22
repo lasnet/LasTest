@@ -7,15 +7,17 @@ pub mod dashboard;
 pub mod discovery;
 pub mod jobs;
 pub mod projects;
+mod settings;
 pub mod static_ui;
 
 use crate::auth::{bearer_token, parse_cookie, require_role, AuthService, SESSION_COOKIE};
 use crate::config::Config;
 use crate::db::Db;
 use crate::domain::{Role, User};
+use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -238,6 +240,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/auth/me", get(auth_routes::me))
         .route("/api/task-types", get(jobs::task_types))
         .route("/api/providers", get(jobs::providers))
+        .route("/api/settings/providers", get(settings::providers))
+        .route(
+            "/api/settings/providers/{id}",
+            put(settings::update_key).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/api/settings/wordlists",
+            post(settings::add_wordlist).layer(DefaultBodyLimit::max(
+                crate::tasks::dnsmap::MAX_WORDLIST_BYTES * 2 + 1024,
+            )),
+        )
         .route("/api/projects", get(projects::list).post(projects::create))
         .route("/api/projects/{id}", get(projects::get_one))
         .route(

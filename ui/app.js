@@ -33,6 +33,8 @@
     rules: [],
     scopeSaving: false,
     taskTypes: [],
+    dnsWordlists: [],
+    maxDnsWordlistBytes: 1024 * 1024,
     jobs: [],
     jobErrorsOpen: new Set(),
     view: "dashboard",
@@ -197,6 +199,7 @@
   }
 
   function showLogin() {
+    state.me = null;
     $("#loading-view").hidden = true;
     notice("");
     $("#app-view").hidden = true;
@@ -204,6 +207,11 @@
     $("#setup-form").hidden = true;
     $("#login-form").hidden = false;
     $("#login-password").value = "";
+    $("#provider-key").value = "";
+    $("#provider-key-dialog").close();
+    $("#wordlist-form").reset();
+    $("#settings-providers").replaceChildren();
+    settingsProviderRequest++;
   }
 
   function showApp() {
@@ -312,11 +320,13 @@
       const value = await api("/api/task-types");
       state.taskTypes = value.task_types || [];
       state.providers = value.providers || {};
+      state.dnsWordlists = value.dns_wordlists || [];
+      state.maxDnsWordlistBytes = value.limitations?.max_dns_wordlist_bytes ?? state.maxDnsWordlistBytes;
       renderScanModules();
       renderProviderCatalog();
-      renderSettingsCatalog();
+      renderSettingsWordlists();
     } catch (error) {
-      renderSettingsCatalog(error);
+      renderSettingsWordlists(error);
       notice(error.message, "error");
     }
   }
@@ -396,14 +406,19 @@
       node.setAttribute("aria-current", node.dataset.viewLink === state.view ? "page" : "false");
     });
     if (state.view === "settings") {
-      selectSettingsTab(hash.slice("settings/".length));
+      const tab = hash.slice("settings/".length);
+      selectSettingsTab(tab);
+      if (tab === "api") loadSettingsProviders();
       return;
     }
     render();
+    if (state.view === "scans" && state.me) loadTaskTypes();
     refreshCurrent();
   }
 
   const settingsTabs = $$("[data-settings-tab]");
+  let settingsProviderRequest = 0;
+  let editingProvider = null;
 
   function selectSettingsTab(name) {
     const selected = settingsTabs.find((tab) => tab.dataset.settingsTab === name) || settingsTabs[0];
@@ -417,28 +432,42 @@
     if (focusIsOnTab) selected.focus();
   }
 
-  function renderSettingsCatalog(error) {
-    const providersNode = $("#settings-providers");
-    const wordlistsNode = $("#settings-wordlists");
+  async function loadSettingsProviders() {
+    const node = $("#settings-providers");
+    const request = ++settingsProviderRequest;
+    node.replaceChildren(el("p", "Loading provider status…", "muted"));
+    try {
+      const data = await api("/api/settings/providers");
+      if (request !== settingsProviderRequest) return;
+      node.replaceChildren(table(["Provider", "Used by", "Key", "Actions"], data.providers, (provider, column) => {
+        if (column === "Provider") return provider.name;
+        if (column === "Used by") return provider.applications.join(" · ");
+        if (column === "Key") {
+          if (provider.last_four) return el("code", `••••${provider.last_four}`);
+          return el("span", provider.configured ? "Server configuration" : "Not configured", "muted");
+        }
+        const button = el("button", provider.configured ? "Replace key" : "Add key");
+        button.type = "button";
+        button.setAttribute("aria-label", `${button.textContent} for ${provider.name}`);
+        button.addEventListener("click", () => openProviderKeyDialog(provider));
+        return button;
+      }));
+    } catch (error) {
+      if (request === settingsProviderRequest) node.replaceChildren(el("p", error.message, "error"));
+    }
+  }
+
+  function renderSettingsWordlists(error) {
+    const node = $("#settings-wordlists");
     if (error) {
-      providersNode.replaceChildren(el("p", "Could not load provider status. Use Refresh to try again.", "error"));
-      wordlistsNode.replaceChildren(el("p", "Could not load word lists. Use Refresh to try again.", "error"));
+      node.replaceChildren(el("p", "Could not load word lists. Use Refresh to try again.", "error"));
       return;
     }
-    const providers = Object.entries(state.providers).filter(([, provider]) => provider?.requires_key);
-    providersNode.replaceChildren(providers.length
-      ? table(["Provider", "Status"], providers, ([name, provider], column) => {
-        if (column === "Provider") return name === "censys" ? "Censys" : name.replaceAll("_", " ");
-        const status = provider.configured ? "Configured" : provider.mode === "incomplete_configuration" ? "Incomplete" : "Not configured";
-        return el("span", status, provider.configured ? "badge ok" : "badge");
-      })
-      : el("p", "No providers require an API key.", "empty"));
-
-    const dnsmap = state.taskTypes.find((task) => task.name === "dns.wordlist");
-    const wordlists = dnsmap?.params_schema?.properties?.wordlist?.enum || [];
-    wordlistsNode.replaceChildren(wordlists.length
-      ? table(["Name", "Tool"], wordlists.map((name) => ({ Name: name, Tool: "dnsmap" })))
-      : el("p", "No built-in word lists available.", "empty"));
+    node.replaceChildren(table(["Name", "Source", "Entries"], state.dnsWordlists, (list, column) => {
+      if (column === "Name") return list.name;
+      if (column === "Source") return list.id === "default" ? "Built-in" : "Uploaded";
+      return countLabel.format(list.entries);
+    }));
   }
 
   function render() {
@@ -455,7 +484,10 @@
 
   async function refreshCurrent() {
     if (state.view === "settings") {
-      if (state.me?.role === "admin") await loadTaskTypes();
+      if (state.me?.role === "admin") {
+        if ($("#settings-tab-api").getAttribute("aria-selected") === "true") await loadSettingsProviders();
+        else await loadTaskTypes();
+      }
       return;
     }
     if (!state.projectId) return;
@@ -1342,6 +1374,78 @@
     settingsTabs[next].focus();
     settingsTabs[next].click();
   });
+  function openProviderKeyDialog(provider) {
+    editingProvider = provider;
+    $("#provider-key-title").textContent = `${provider.name} API key`;
+    $("#provider-key-hint").textContent = provider.id === "censys"
+      ? "Enter a Censys Platform personal access token."
+      : "Enter the key issued by this provider.";
+    $("#provider-key-error").textContent = "";
+    $("#provider-key").value = "";
+    $("#provider-key-dialog").showModal();
+  }
+
+  $("#cancel-provider-key").addEventListener("click", () => $("#provider-key-dialog").close());
+  $("#provider-key-dialog").addEventListener("close", () => {
+    editingProvider = null;
+    $("#provider-key").value = "";
+  });
+  $("#provider-key-dialog").addEventListener("cancel", (event) => {
+    if ($("#save-provider-key").disabled) event.preventDefault();
+  });
+  $("#provider-key-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = $("#save-provider-key");
+    if (!editingProvider || button.disabled) return;
+    const provider = editingProvider;
+    const cancel = $("#cancel-provider-key");
+    const field = $("#provider-key");
+    const error = $("#provider-key-error");
+    error.textContent = "";
+    button.disabled = cancel.disabled = field.disabled = true;
+    try {
+      await api(`/api/settings/providers/${encodeURIComponent(provider.id)}`, {
+        method: "PUT",
+        body: { key: field.value.trim() },
+      });
+      $("#provider-key-dialog").close();
+      notice(`${provider.name} key saved.`, "success");
+      await loadSettingsProviders();
+    } catch (err) {
+      error.textContent = err.message;
+    } finally {
+      button.disabled = cancel.disabled = field.disabled = false;
+    }
+  });
+
+  $("#wordlist-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = $("#wordlist-upload-button");
+    if (button.disabled) return;
+    const error = $("#wordlist-upload-error");
+    const nameField = $("#wordlist-name");
+    const fileField = $("#wordlist-file");
+    const name = nameField.value.trim();
+    const file = fileField.files[0];
+    error.textContent = "";
+    button.disabled = nameField.disabled = fileField.disabled = true;
+    try {
+      if (!file || !file.name.toLowerCase().endsWith(".txt")) throw new Error("Choose a TXT file.");
+      if (file.size > state.maxDnsWordlistBytes) throw new Error("TXT file must be at most 1 MiB.");
+      let contents;
+      try { contents = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()); }
+      catch { throw new Error("Choose a TXT file encoded as UTF-8."); }
+      await api("/api/settings/wordlists", { method: "POST", body: { name, contents } });
+      form.reset();
+      notice(`Wordlist “${name}” uploaded.`, "success");
+      await loadTaskTypes();
+    } catch (err) {
+      error.textContent = err.message;
+    } finally {
+      button.disabled = nameField.disabled = fileField.disabled = false;
+    }
+  });
   $(".sidebar").addEventListener("keydown", (event) => {
     if (event.key === "Escape" && menuButton.getAttribute("aria-expanded") === "true") {
       menuButton.focus();
@@ -1649,7 +1753,7 @@
   function hiddenScanField(task, key) {
     return scanTargetFields.has(key) || (task.name === "http.probe" && key === "mode") || (task.name === "subdomains.subfinder" && ["sources", "resolve"].includes(key))
       || (task.name === "subdomains.discover" && key === "providers")
-      || (task.name === "reverse.ip" && key === "providers")
+      || (task.name === "reverse.ip" && ["providers", "use_configured_censys"].includes(key))
       || (task.name === "dns.wordlist" && key === "words");
   }
 
@@ -1859,22 +1963,26 @@
           if (task.name === "reverse.ip" && key === "sources") {
             const choices = el("fieldset", null, "source-choices");
             choices.appendChild(el("legend", "Sources"));
-            for (const value of property.items.enum) {
+            for (const value of property.items.enum.filter((source) => source !== "censys")) {
               const option = el("input");
               option.type = "checkbox"; option.dataset.scanParam = key; option.dataset.task = task.name; option.dataset.scanValue = value;
               option.checked = params.sources?.includes(value) || false;
               option.disabled = scanning || state.me?.role === "viewer" || !state.providers[value]?.available;
-              const text = value === "ptr" ? "PTR" : value === "censys" ? "Censys" : "Shodan InternetDB";
               const label = el("label", null, "checkbox");
-              append(label, option, el("span", option.disabled && !state.providers[value]?.available ? `${text} (not configured)` : text));
+              append(label, option, el("span", value === "ptr" ? "PTR" : "Shodan InternetDB"));
               choices.appendChild(label);
             }
+            choices.appendChild(el("p", "Censys is used automatically when configured in Settings.", "muted field-hint"));
             fields.appendChild(choices);
             continue;
           } else if (property.enum) {
             input = el("select");
-            for (const option of property.enum) input.appendChild(new Option(option, option));
-            input.value = params[key] ?? property.default ?? property.enum[0];
+            for (const option of property.enum) {
+              const list = key === "wordlist" ? state.dnsWordlists.find(({ id }) => id === option) : null;
+              const label = list ? `${list.name} (${countLabel.format(list.entries)} entries)` : option;
+              input.appendChild(new Option(label, option));
+            }
+            input.value = property.enum.includes(params[key]) ? params[key] : property.default ?? property.enum[0];
           } else {
             input = el(property.type === "array" && property.items?.type !== "integer" ? "textarea" : "input");
             if (property.type === "boolean") {
@@ -1910,7 +2018,7 @@
             } else append(field, label, input);
           }
           const help = {
-            wordlist: "Full built-in dnsmap wordlist: 989 entries.",
+            wordlist: "Upload additional DNS wordlists in Settings → WordList.",
             concurrency: "Choose how many DNS lookups run in parallel. Default: 8. Higher values increase DNS traffic.",
             record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Selected types are saved in the records artifact; A/AAAA are always checked for Assets.",
           };
@@ -2020,7 +2128,7 @@
           const runs = task.name === "dns.wordlist" ? scopeScanDomains().map((domain) => ({ ...params, domain })) : [params];
           for (const run of runs) {
             if (module.id === "assets") {
-              const chain = { preset: "asset_discovery", asset_ids: assetIds, sources: run.sources, http_enrichment: state.discoveryHttpEnrichment };
+              const chain = { preset: "asset_discovery", asset_ids: assetIds, sources: run.sources, use_configured_censys: true, http_enrichment: state.discoveryHttpEnrichment };
               tasks.set(JSON.stringify(chain), { task_type: "asset_discovery", params: chain });
             } else tasks.set(JSON.stringify({ task_type: task.name, params: run, asset_ids: assetIds }), { task_type: task.name, params: run, asset_ids: assetIds });
           }

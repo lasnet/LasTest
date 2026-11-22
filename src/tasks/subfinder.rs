@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashSet;
+use std::io::Write;
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 
@@ -81,9 +82,39 @@ pub async fn run(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
         .subfinder_path
         .as_ref()
         .context("subfinder path is missing")?;
-    let home = ctx.config.tmp_dir().join(format!("subfinder-{}", job.id));
-    tokio::fs::create_dir_all(&home).await?;
-    let result = run_domains(path, &home, domains, &params.sources, ctx).await;
+    let mut keys = crate::provider_settings::subfinder_keys(&ctx.db, &ctx.config)?;
+    if !params.sources.is_empty() {
+        keys.retain(|source, _| params.sources.iter().any(|selection| selection == source));
+    }
+    let home = ctx
+        .config
+        .tmp_dir()
+        .join(format!("subfinder-{}", uuid::Uuid::new_v4()));
+    let mut directory = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    directory.create(&home)?;
+    let result = async {
+        if !keys.is_empty() {
+            let path = home.join("provider-config.yaml");
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(path)?;
+            let yaml = serde_yaml::to_string(&keys)
+                .map_err(|_| anyhow::anyhow!("cannot encode Subfinder provider configuration"))?;
+            file.write_all(yaml.as_bytes())?;
+        }
+        run_domains(path, &home, domains, &params.sources, !keys.is_empty(), ctx).await
+    }
+    .await;
     let _ = tokio::fs::remove_dir_all(&home).await;
     result
 }
@@ -93,6 +124,7 @@ async fn run_domains(
     home: &std::path::Path,
     domains: Vec<String>,
     sources: &[String],
+    with_credentials: bool,
     ctx: &TaskContext,
 ) -> Result<TaskOutcome> {
     let mut outcome = TaskOutcome::new();
@@ -181,10 +213,16 @@ async fn run_domains(
             anyhow::bail!("subfinder output exceeded the artifact limit");
         }
         if !status.success() {
-            outcome.error(format!(
-                "subfinder {domain} exited with {status}: {}",
-                String::from_utf8_lossy(&diagnostics)
-            ));
+            let message = if with_credentials {
+                // Some provider errors contain a request URL with the API key.
+                format!("subfinder {domain} exited with {status}")
+            } else {
+                format!(
+                    "subfinder {domain} exited with {status}: {}",
+                    String::from_utf8_lossy(&diagnostics)
+                )
+            };
+            outcome.error(message);
             continue;
         }
         for line in String::from_utf8_lossy(&output).lines() {

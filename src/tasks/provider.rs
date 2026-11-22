@@ -75,10 +75,13 @@ pub fn client(config: &Config) -> Result<reqwest::Client> {
 pub fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (key, value) in pairs {
-        if let (Ok(key), Ok(value)) = (
+        if let (Ok(key), Ok(mut value)) = (
             reqwest::header::HeaderName::from_bytes(key.as_bytes()),
             HeaderValue::from_str(value),
         ) {
+            if key == reqwest::header::AUTHORIZATION {
+                value.set_sensitive(true);
+            }
             map.insert(key, value);
         }
     }

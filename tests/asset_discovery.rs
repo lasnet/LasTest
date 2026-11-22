@@ -619,7 +619,7 @@ fn version_two_database_upgrades_without_losing_assets() {
         .unwrap();
     }
     let db = lastest::db::Db::new(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), lastest::db::SCHEMA_VERSION);
     let assets = db.list_assets("prj_upgrade", 10).unwrap();
     assert!(assets
         .iter()

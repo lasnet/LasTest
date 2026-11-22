@@ -65,6 +65,10 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
     let mut outcome = TaskOutcome::new();
     outcome.target(domains.len());
     let client = provider::client(&ctx.config)?;
+    let saved_token = crate::provider_settings::read_key(&ctx.db, &ctx.config, "certspotter")?;
+    let token = saved_token
+        .as_deref()
+        .or(ctx.config.certspotter_token.as_deref());
     let mut seen: HashSet<String> = HashSet::new();
     let mut wildcards: HashSet<String> = HashSet::new();
     let mut source_status = Vec::new();
@@ -92,7 +96,7 @@ pub async fn run_subdomains(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome>
                 outcome.error(format!("unsupported CT provider: {provider_name}"));
                 continue;
             }
-            match collect_certspotter(&client, ctx, &domain).await {
+            match collect_certspotter(&client, ctx, &domain, token).await {
                 Ok(result) => {
                     for name in result.names {
                         let Ok(host) = normalize_domain(&name) else {
@@ -199,6 +203,7 @@ async fn collect_certspotter(
     client: &reqwest::Client,
     ctx: &TaskContext,
     domain: &str,
+    token: Option<&str>,
 ) -> Result<CtResult> {
     // Build every page from the configured v1 endpoint. The provider's Link
     // header can omit /v1; the documented cursor is the last issuance's id.
@@ -230,7 +235,7 @@ async fn collect_certspotter(
             ctx.ensure_active()?;
             pages += 1;
             let mut request = client.get(next.clone());
-            if let Some(token) = &ctx.config.certspotter_token {
+            if let Some(token) = token {
                 request = request.bearer_auth(token);
             }
             let response = request
