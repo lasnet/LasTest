@@ -314,7 +314,11 @@
       state.providers = value.providers || {};
       renderScanModules();
       renderProviderCatalog();
-    } catch (error) { notice(error.message, "error"); }
+      renderSettingsCatalog();
+    } catch (error) {
+      renderSettingsCatalog(error);
+      notice(error.message, "error");
+    }
   }
 
   async function selectProject(id) {
@@ -381,17 +385,60 @@
 
   function route() {
     const hash = (location.hash || "#dashboard").replace("#", "");
-    const allowed = ["dashboard", "scope", "scans", "assets", "findings", "reports", "users"];
-    state.view = allowed.includes(hash) ? hash : "dashboard";
-    if (state.view === "users" && state.me?.role !== "admin") state.view = "dashboard";
+    const view = hash.startsWith("settings/") ? "settings" : hash;
+    const allowed = ["dashboard", "scope", "scans", "assets", "findings", "reports", "users", "settings"];
+    state.view = allowed.includes(view) ? view : "dashboard";
+    if (["users", "settings"].includes(state.view) && state.me?.role !== "admin") state.view = "dashboard";
     $$("[data-view]").forEach((node) => { node.hidden = node.dataset.view !== state.view; });
     $$("[data-view-heading]").forEach((node) => { node.hidden = node.dataset.viewHeading !== state.view; });
     $$("[data-view-link]").forEach((node) => {
       node.classList.toggle("active", node.dataset.viewLink === state.view);
       node.setAttribute("aria-current", node.dataset.viewLink === state.view ? "page" : "false");
     });
+    if (state.view === "settings") {
+      selectSettingsTab(hash.slice("settings/".length));
+      return;
+    }
     render();
     refreshCurrent();
+  }
+
+  const settingsTabs = $$("[data-settings-tab]");
+
+  function selectSettingsTab(name) {
+    const selected = settingsTabs.find((tab) => tab.dataset.settingsTab === name) || settingsTabs[0];
+    const focusIsOnTab = settingsTabs.includes(document.activeElement);
+    for (const tab of settingsTabs) {
+      const active = tab === selected;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+    }
+    if (focusIsOnTab) selected.focus();
+  }
+
+  function renderSettingsCatalog(error) {
+    const providersNode = $("#settings-providers");
+    const wordlistsNode = $("#settings-wordlists");
+    if (error) {
+      providersNode.replaceChildren(el("p", "Could not load provider status. Use Refresh to try again.", "error"));
+      wordlistsNode.replaceChildren(el("p", "Could not load word lists. Use Refresh to try again.", "error"));
+      return;
+    }
+    const providers = Object.entries(state.providers).filter(([, provider]) => provider?.requires_key);
+    providersNode.replaceChildren(providers.length
+      ? table(["Provider", "Status"], providers, ([name, provider], column) => {
+        if (column === "Provider") return name === "censys" ? "Censys" : name.replaceAll("_", " ");
+        const status = provider.configured ? "Configured" : provider.mode === "incomplete_configuration" ? "Incomplete" : "Not configured";
+        return el("span", status, provider.configured ? "badge ok" : "badge");
+      })
+      : el("p", "No providers require an API key.", "empty"));
+
+    const dnsmap = state.taskTypes.find((task) => task.name === "dns.wordlist");
+    const wordlists = dnsmap?.params_schema?.properties?.wordlist?.enum || [];
+    wordlistsNode.replaceChildren(wordlists.length
+      ? table(["Name", "Tool"], wordlists.map((name) => ({ Name: name, Tool: "dnsmap" })))
+      : el("p", "No built-in word lists available.", "empty"));
   }
 
   function render() {
@@ -407,6 +454,10 @@
   }
 
   async function refreshCurrent() {
+    if (state.view === "settings") {
+      if (state.me?.role === "admin") await loadTaskTypes();
+      return;
+    }
     if (!state.projectId) return;
     try {
       if (["dashboard", "assets", "findings"].includes(state.view)) await loadDashboard();
@@ -1268,6 +1319,28 @@
       menuButton.focus();
       menuButton.setAttribute("aria-expanded", "false");
     }
+  });
+  for (const tab of settingsTabs) {
+    tab.addEventListener("click", () => {
+      const name = tab.dataset.settingsTab;
+      location.hash = name === "general" ? "settings" : `settings/${name}`;
+    });
+  }
+  $("#settings-tabs").addEventListener("keydown", (event) => {
+    const current = settingsTabs.indexOf(event.target);
+    if (current === -1) return;
+    const last = settingsTabs.length - 1;
+    let next;
+    switch (event.key) {
+      case "ArrowLeft": next = current === 0 ? last : current - 1; break;
+      case "ArrowRight": next = current === last ? 0 : current + 1; break;
+      case "Home": next = 0; break;
+      case "End": next = last; break;
+      default: return;
+    }
+    event.preventDefault();
+    settingsTabs[next].focus();
+    settingsTabs[next].click();
   });
   $(".sidebar").addEventListener("keydown", (event) => {
     if (event.key === "Escape" && menuButton.getAttribute("aria-expanded") === "true") {

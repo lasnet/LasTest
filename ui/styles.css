@@ -368,6 +368,22 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .view { display: grid; gap: var(--gap); min-width: 0; }
 
+.app-shell:has([data-view="settings"]:not([hidden])) :is(#new-project-button, #new-project-panel, .theme-control) { display: none; }
+.settings-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); }
+.settings-tabs button {
+  min-height: 44px;
+  padding-inline: 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--control-radius) var(--control-radius) 0 0;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-tabs button[aria-selected="false"]:hover { border-bottom-color: var(--control); color: var(--ink); }
+.settings-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); }
+.settings-tabs button:focus-visible { outline-offset: -4px; }
+.settings-theme { max-width: 17rem; }
+
 .panel {
   min-width: 0;
   padding: 16px 18px;

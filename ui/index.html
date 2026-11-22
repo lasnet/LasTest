@@ -120,12 +120,13 @@
           <div class="nav-group" data-admin-only hidden>
             <p class="nav-label">Administration</p>
             <a href="#users" data-view-link="users"><svg class="icon" aria-hidden="true"><use href="#icon-users"/></svg>Users</a>
+            <a href="#settings" data-view-link="settings"><svg class="icon" aria-hidden="true"><use href="#icon-settings"/></svg>Settings</a>
           </div>
         </nav>
         <div class="sidebar-bottom">
           <div class="theme-control">
             <label for="theme-select">Theme</label>
-            <select id="theme-select">
+            <select id="theme-select" data-theme-select>
               <option value="green">Green</option>
               <option value="blue">Blue</option>
               <option value="black">Black</option>
@@ -170,6 +171,9 @@
         <div class="view-heading" data-view-heading="users" hidden>
           <h1 id="users-title">Users and audit</h1>
           <p>Manage access to LasTest and review account activity.</p>
+        </div>
+        <div class="view-heading" data-view-heading="settings" hidden>
+          <h1 id="settings-title">Settings</h1>
         </div>
       </div>
       <div class="header-actions">
@@ -396,6 +400,37 @@
         </div>
         <section class="panel"><h2>Users</h2><div id="users-list"></div></section>
         <section class="panel"><h2>Audit log</h2><div id="audit-list"></div></section>
+      </section>
+
+      <section data-view="settings" class="view" hidden aria-labelledby="settings-title">
+        <div id="settings-tabs" class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button id="settings-tab-general" type="button" role="tab" aria-selected="true" aria-controls="settings-general" data-settings-tab="general">General</button>
+          <button id="settings-tab-api" type="button" role="tab" aria-selected="false" aria-controls="settings-api" data-settings-tab="api" tabindex="-1">API</button>
+          <button id="settings-tab-wordlist" type="button" role="tab" aria-selected="false" aria-controls="settings-wordlist" data-settings-tab="wordlist" tabindex="-1">WordList</button>
+        </div>
+        <section id="settings-general" class="panel" role="tabpanel" aria-labelledby="settings-tab-general">
+          <h2>Appearance</h2>
+          <div class="field settings-theme">
+            <label for="settings-theme-select">Theme</label>
+            <select id="settings-theme-select" data-theme-select aria-describedby="settings-theme-hint">
+              <option value="green">Green</option>
+              <option value="blue">Blue</option>
+              <option value="black">Black</option>
+              <option value="light">Light</option>
+            </select>
+            <p id="settings-theme-hint" class="muted field-hint">Applies to this browser.</p>
+          </div>
+        </section>
+        <section id="settings-api" class="panel" role="tabpanel" aria-labelledby="settings-tab-api" tabindex="0" hidden>
+          <h2>Provider credentials</h2>
+          <p class="muted">Manage API keys in the server configuration.</p>
+          <div id="settings-providers" aria-live="polite"></div>
+        </section>
+        <section id="settings-wordlist" class="panel" role="tabpanel" aria-labelledby="settings-tab-wordlist" tabindex="0" hidden>
+          <h2>Word lists</h2>
+          <p class="muted">Built-in lists included with LasTest.</p>
+          <div id="settings-wordlists" aria-live="polite"></div>
+        </section>
       </section>
     </main>
   </div>
