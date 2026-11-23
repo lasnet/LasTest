@@ -369,6 +369,39 @@ pub async fn get_job(
     Ok(Json(json!({"job": job_json(&state, &job)})))
 }
 
+/// A durable checkpoint can be downloaded even while the worker is running or
+/// after a crash prevented final artifact publication.
+pub async fn download_result(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Viewer)?;
+    let job = state
+        .db
+        .job_by_id(&id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("job not found"))?;
+    let filename: String = job
+        .id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let body = serde_json::to_vec_pretty(&job.result).map_err(ApiError::internal)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}-result.json\""),
+            ),
+        ],
+        body,
+    )
+        .into_response())
+}
+
 pub async fn cancel_job(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

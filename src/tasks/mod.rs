@@ -6,6 +6,7 @@ pub mod asset_input;
 pub(crate) mod discovery;
 pub mod dns_tasks;
 pub mod dnsmap;
+pub mod dnsx;
 pub mod http_tasks;
 pub mod network;
 pub mod nmap;
@@ -17,6 +18,8 @@ pub mod subfinder;
 pub mod tech_catalog;
 pub mod web_checks;
 mod whatweb;
+pub mod wordlist;
+mod wordlist_dns;
 
 use crate::config::Config;
 use crate::db::jobs::{NewFinding, NewObservation};
@@ -508,10 +511,10 @@ pub fn validate_submission(
             }
         }
         "dns.wordlist" => {
-            let (params, _) = dnsmap::prepare(params, config, db)?;
+            let (params, _) = wordlist::prepare(params, config, db)?;
             anyhow::ensure!(
-                dnsmap::CONCURRENCY_OPTIONS.contains(&params.concurrency),
-                "dns.wordlist concurrency must be 10, 20, 50 or 100"
+                wordlist::CONCURRENCY_OPTIONS.contains(&params.concurrency),
+                "dns.wordlist concurrency must be 4, 8 or 16"
             );
         }
         "reverse.ip" => {

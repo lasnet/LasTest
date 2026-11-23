@@ -70,7 +70,11 @@ pub struct Config {
     pub subfinder_path: Option<PathBuf>,
     pub dnsmap_path: Option<PathBuf>,
     pub whatweb_path: Option<PathBuf>,
-    pub dnsmap_timeout_seconds: u64,
+    #[serde(alias = "dnsmap_timeout_seconds")]
+    pub dns_wordlist_timeout_seconds: u64,
+    pub dnsx_path: Option<PathBuf>,
+    pub dns_wordlist_resolver: String,
+    pub dns_wordlist_rate: u32,
     pub subfinder_timeout_seconds: u64,
     pub nmap_timeout_seconds: u64,
     pub nmap_max_output_bytes: u64,
@@ -163,7 +167,10 @@ impl Default for Config {
             subfinder_path: None,
             dnsmap_path: None,
             whatweb_path: None,
-            dnsmap_timeout_seconds: 7200,
+            dns_wordlist_timeout_seconds: 7200,
+            dnsx_path: None,
+            dns_wordlist_resolver: "1.1.1.1:53".into(),
+            dns_wordlist_rate: 100,
             subfinder_timeout_seconds: 150,
             nmap_timeout_seconds: 120,
             nmap_max_output_bytes: 4 * 1024 * 1024,
@@ -223,9 +230,25 @@ impl Config {
 
     fn apply_env(&mut self) -> Result<()> {
         if let Ok(value) = std::env::var("LASTEST_DNSMAP_TIMEOUT_SECONDS") {
-            self.dnsmap_timeout_seconds = value
+            self.dns_wordlist_timeout_seconds = value
                 .parse()
                 .context("LASTEST_DNSMAP_TIMEOUT_SECONDS must be a positive integer")?;
+        }
+        if let Ok(value) = std::env::var("LASTEST_DNS_WORDLIST_TIMEOUT_SECONDS") {
+            self.dns_wordlist_timeout_seconds = value
+                .parse()
+                .context("LASTEST_DNS_WORDLIST_TIMEOUT_SECONDS must be a positive integer")?;
+        }
+        if let Ok(value) = std::env::var("LASTEST_DNSX_PATH") {
+            self.dnsx_path = (!value.trim().is_empty()).then(|| PathBuf::from(value));
+        }
+        if let Ok(value) = std::env::var("LASTEST_DNS_WORDLIST_RESOLVER") {
+            self.dns_wordlist_resolver = value;
+        }
+        if let Ok(value) = std::env::var("LASTEST_DNS_WORDLIST_RATE") {
+            self.dns_wordlist_rate = value
+                .parse()
+                .context("LASTEST_DNS_WORDLIST_RATE must be an integer between 1 and 100")?;
         }
         if let Ok(value) = std::env::var("LASTEST_MAX_CONCURRENT_JOBS") {
             self.max_concurrent_jobs = value
@@ -319,8 +342,13 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.dnsmap_timeout_seconds == 0 {
-            anyhow::bail!("dnsmap_timeout_seconds must be positive");
+        wordlist_resolver_address(&self.dns_wordlist_resolver)?;
+        anyhow::ensure!(
+            (1..=100).contains(&self.dns_wordlist_rate),
+            "dns_wordlist_rate must be between 1 and 100"
+        );
+        if self.dns_wordlist_timeout_seconds == 0 {
+            anyhow::bail!("dns_wordlist_timeout_seconds must be positive");
         }
         if self.subfinder_timeout_seconds == 0 {
             anyhow::bail!("subfinder_timeout_seconds must be positive");
@@ -607,4 +635,15 @@ impl Config {
             }
         })
     }
+}
+
+/// Resolver infrastructure is operator configured and may be private, but the
+/// absolute metadata/non-unicast exclusions still apply.
+pub(crate) fn wordlist_resolver_address(value: &str) -> Result<std::net::SocketAddr> {
+    let address: std::net::SocketAddr = value
+        .parse()
+        .context("dns_wordlist_resolver must be a literal IP:port")?;
+    anyhow::ensure!(address.port() > 0, "DNS resolver port must be nonzero");
+    NetworkPolicy::new(vec!["0.0.0.0/0".parse()?, "::/0".parse()?]).permits(address.ip())?;
+    Ok(address)
 }

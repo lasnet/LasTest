@@ -817,7 +817,7 @@ fn doctor(config: &Config) -> CliResult<()> {
         "tools": {
             "nmap": nmap,
             "nmap_available": nmap.is_some(),
-            "dnsmap_available": crate::tasks::dnsmap::available(config),
+            "dnsx_available": crate::tasks::wordlist::available(config),
             "certspotter_configured": !config.certspotter_url.is_empty(),
             "certspotter_token_configured": config.certspotter_token.is_some(),
             "censys_configured": config.censys_api_id.is_some() && config.censys_api_secret.is_some(),

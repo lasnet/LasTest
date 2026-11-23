@@ -6,11 +6,8 @@ use crate::tasks::{
 };
 use anyhow::Result;
 use hickory_resolver::proto::rr::RecordType;
-use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::net::IpAddr;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -252,131 +249,7 @@ pub async fn run_records(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
 }
 
 pub async fn run_wordlist(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {
-    let (params, words) = crate::tasks::dnsmap::prepare(&job.params, &ctx.config, &ctx.db)?;
-    let domain = normalize_domain(&params.domain)?;
-    ctx.authorize_host(&domain)?;
-    let dns = ctx.dns()?;
-    let mut outcome = TaskOutcome::new();
-    outcome.target(words.len());
-    // Probe twice to collect wildcard addresses from both address families.
-    let mut wildcard: HashSet<IpAddr> = HashSet::new();
-    let mut wildcard_ips: Vec<String> = Vec::new();
-    for _ in 0..2 {
-        ctx.ensure_active()?;
-        let label: String = (0..12)
-            .map(|_| {
-                let idx = rand::rng().random_range(0..36);
-                char::from_digit(idx, 36).unwrap_or('x')
-            })
-            .collect();
-        let probe = format!("{label}.{domain}");
-        if !discovery::allows_dns(ctx, &domain, &probe)? {
-            continue;
-        }
-        if let Ok(ips) = discovery::resolve_ips(&dns, ctx, &domain, &probe).await {
-            for ip in &ips {
-                wildcard.insert(*ip);
-                wildcard_ips.push(ip.to_string());
-            }
-        }
-    }
-    wildcard_ips.sort();
-    wildcard_ips.dedup();
-    let mut found = Vec::new();
-    let mut hosts = Vec::new();
-    let mut rejected = Vec::new();
-    let candidates = crate::tasks::dnsmap::discover(&params, &words, ctx).await?;
-    let mut lookups = tokio::task::JoinSet::new();
-    let mut candidates = candidates.into_iter();
-    loop {
-        while lookups.len() < params.concurrency {
-            let Some(candidate) = candidates.next() else {
-                break;
-            };
-            ctx.ensure_active()?;
-            if !discovery::allows_dns(ctx, &domain, &candidate)? {
-                continue;
-            }
-            let dns = dns.clone();
-            let ctx = ctx.clone();
-            let domain = domain.clone();
-            lookups.spawn(async move {
-                let result = discovery::resolve_ips(&dns, &ctx, &domain, &candidate).await;
-                (candidate, result)
-            });
-        }
-        let next = tokio::select! {
-            next = lookups.join_next() => next,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                ctx.ensure_active()?;
-                ctx.authorize_host(&domain)?;
-                continue;
-            }
-        };
-        let Some(next) = next else {
-            break;
-        };
-        let (candidate, result) = next?;
-        ctx.ensure_active()?;
-        if !discovery::allows_dns(ctx, &domain, &candidate)? {
-            continue;
-        }
-        match result {
-            Ok(ips) => {
-                if !wildcard.is_empty() && ips.iter().all(|ip| wildcard.contains(ip)) {
-                    outcome.skipped();
-                    rejected.push(json!({"host":candidate,"reason":"wildcard","addresses":ips}));
-                    continue;
-                }
-                found.push(candidate.clone());
-                discovery::observe_host(
-                    &mut outcome,
-                    ctx,
-                    "dns.wordlist",
-                    &domain,
-                    &candidate,
-                    &ips,
-                )?;
-                hosts.push(json!({"host":candidate,"ips":ips,"dns_verified":true}));
-                outcome.processed();
-            }
-            Err(error) => {
-                outcome.skipped();
-                if crate::net::dns::is_no_records(&error) {
-                    rejected.push(json!({"host":candidate,"reason":"no_addresses"}));
-                } else {
-                    let message = crate::net::dns::error_message(&error);
-                    outcome.error(format!("DNS {candidate}: {message}"));
-                    rejected.push(json!({"host":candidate,"reason":"dns_error","error":message}));
-                }
-            }
-        }
-    }
-    found.sort();
-    outcome.counters.skipped = outcome
-        .counters
-        .targets
-        .saturating_sub(outcome.counters.processed);
-    outcome.result = json!({
-        "format_version": "1",
-        "domain": domain,
-        "engine": "dnsmap",
-        "wordlist": if params.words.is_empty() { params.wordlist.as_str() } else { "custom" },
-        "concurrency": params.concurrency,
-        "found": found,
-        "hosts": hosts,
-        "rejected": rejected,
-        "dns_verified": true,
-        "wildcard_addresses": wildcard_ips,
-        "searched": outcome.counters.targets,
-    });
-    let result = outcome.result.clone();
-    outcome.add_artifact(
-        "dns_wordlist",
-        &format!("{}-dns-wordlist.json", job.id),
-        &result,
-    )?;
-    Ok(outcome.finalize())
+    super::dnsx::run(job, ctx).await
 }
 
 pub async fn run_reverse_ip(job: &Job, ctx: &TaskContext) -> Result<TaskOutcome> {

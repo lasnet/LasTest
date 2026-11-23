@@ -27,6 +27,96 @@ pub struct TestEnv {
     pub app: Router,
 }
 
+/// A Rust DNS requester launched as an external process, with the same command
+/// contract as dnsx. It sends real DNS packets through the adapter's relay.
+pub fn fake_dnsx(home: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = home.join("dnsx");
+    let test = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .replace('\'', "'\\''");
+    std::fs::write(
+        &path,
+        format!(
+            r#"#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -l) shift; export LASTEST_FIXTURE_HOSTS="$1";;
+    -r) shift; export LASTEST_FIXTURE_RESOLVER="$1";;
+    -t) shift; export LASTEST_FIXTURE_THREADS="$1";;
+    -stream) exit 66;;
+  esac
+  shift
+done
+exec '{test}' --exact support::dnsx_fixture_process --ignored --nocapture
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+#[ignore = "external DNS engine fixture, launched only by fake_dnsx"]
+fn dnsx_fixture_process() {
+    use hickory_resolver::proto::{
+        op::{Message, Query},
+        rr::{Name, RecordType},
+    };
+    let file = std::env::var("LASTEST_FIXTURE_HOSTS").unwrap();
+    let server = std::env::var("LASTEST_FIXTURE_RESOLVER").unwrap();
+    let contents = std::fs::read_to_string(file).unwrap();
+    let threads: usize = std::env::var("LASTEST_FIXTURE_THREADS")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let hosts: Vec<_> = contents.lines().map(str::to_owned).collect();
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                socket.connect(&server).unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(6)))
+                    .unwrap();
+                loop {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(host) = hosts.get(index) else {
+                        break;
+                    };
+                    for kind in [RecordType::A, RecordType::AAAA] {
+                        let mut message = Message::new();
+                        message
+                            .set_id(rand::random())
+                            .set_recursion_desired(true)
+                            .add_query(Query::query(Name::from_ascii(host).unwrap(), kind));
+                        let packet = message.to_vec().unwrap();
+                        for _ in 0..2 {
+                            socket.send(&packet).unwrap();
+                            let mut answer = [0; 65535];
+                            if let Ok(len) = socket.recv(&mut answer) {
+                                if let Ok(reply) = Message::from_vec(&answer[..len]) {
+                                    if reply.id() == message.id()
+                                        && matches!(reply.response_code(),
+                                        hickory_resolver::proto::op::ResponseCode::NoError |
+                                        hickory_resolver::proto::op::ResponseCode::NXDomain)
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
 impl TestEnv {
     pub fn new() -> Self {
         let env = Self::empty();

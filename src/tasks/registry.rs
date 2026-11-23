@@ -110,25 +110,27 @@ pub fn task_types(config: &Config) -> Vec<TaskTypeInfo> {
         },
         TaskTypeInfo {
             name: "dns.wordlist",
-            title: "DNS wordlist search with wildcard detection (dnsmap)",
+            title: "DNS wordlist search with wildcard detection (dnsx)",
             category: "recon",
             result_format_version: "1",
-            available: crate::tasks::dnsmap::available(config),
-            unavailable_reason: (!crate::tasks::dnsmap::available(config))
-                .then(|| "dnsmap is not installed or LASTEST_DNSMAP_PATH is not configured".into()),
+            available: crate::tasks::wordlist::available(config),
+            unavailable_reason: (!crate::tasks::wordlist::available(config))
+                .then(|| "dnsx is not installed or LASTEST_DNSX_PATH is not configured".into()),
             requires_explicit_scope: "domain",
             params_schema: json!({
                 "type": "object",
                 "properties": {
                     "domain": {"type": "string"},
                     "wordlist": {"type": "string", "enum": ["default"], "default": "default"},
-                    "concurrency": {"type": "integer", "enum": crate::tasks::dnsmap::CONCURRENCY_OPTIONS, "default": crate::tasks::dnsmap::DEFAULT_CONCURRENCY},
+                    "concurrency": {"type": "integer", "enum": crate::tasks::wordlist::CONCURRENCY_OPTIONS, "default": crate::tasks::wordlist::DEFAULT_CONCURRENCY},
+                    "rate_limit": {"type":"integer","minimum":1,"maximum":config.dns_wordlist_rate,"default":50u32.min(config.dns_wordlist_rate)},
+                    "resolver": {"type":"string","enum":["dedicated","system"],"default":"dedicated"},
                     "words": {"type": "array", "items": {"type": "string"}}
                 },
                 "required": ["domain"],
                 "additionalProperties": false
             }),
-            limits: json!({"timeout_seconds": config.dnsmap_timeout_seconds}),
+            limits: json!({"timeout_seconds": config.dns_wordlist_timeout_seconds, "dns_requests_per_second": config.dns_wordlist_rate, "resolver": config.dns_wordlist_resolver, "max_simultaneous_wordlists": 1}),
             inputs: vec!["one in-scope domain"],
             outputs: vec!["host observations", "wildcard diagnostics"],
         },

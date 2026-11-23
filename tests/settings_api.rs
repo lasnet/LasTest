@@ -278,16 +278,8 @@ async fn named_wordlist_is_validated_queued_executed_and_returned_with_evidence(
     .await;
     let mut config = env.config.clone();
     config.dns_server = Some(dns.addr.to_string());
-    config.dnsmap_path = Some(executable(
-        env.temp.path(),
-        "dnsmap",
-        r#"#!/bin/sh
-set -eu
-while IFS= read -r word; do
-  printf '%s.%s\n' "$word" "$1"
-done < "$3"
-"#,
-    ));
+    config.dnsx_path = Some(support::fake_dnsx(env.temp.path()));
+    config.dns_wordlist_resolver = dns.addr.to_string();
     let app = router(Arc::new(AppState::new(config.clone(), env.db.clone())));
     let uri = "/api/settings/wordlists";
     let bad = call(
@@ -331,17 +323,17 @@ done < "$3"
         json!([{"id":"default","name":"default","entries":989},wordlist])
     );
     let tasks = catalog.body["task_types"].as_array().unwrap();
-    let dnsmap = tasks
+    let dnsx = tasks
         .iter()
         .find(|task| task["name"] == "dns.wordlist")
         .unwrap();
     assert_eq!(
-        dnsmap["params_schema"]["properties"]["wordlist"]["enum"],
+        dnsx["params_schema"]["properties"]["wordlist"]["enum"],
         json!(["default", id])
     );
     assert_eq!(
-        dnsmap["params_schema"]["properties"]["concurrency"],
-        json!({"type":"integer","enum":[10,20,50,100],"default":20})
+        dnsx["params_schema"]["properties"]["concurrency"],
+        json!({"type":"integer","enum":[4,8,16],"default":8})
     );
 
     let mut rules = scope_rules(&[("exact", "approved.test")]);

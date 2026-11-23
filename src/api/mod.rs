@@ -266,6 +266,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(jobs::list_jobs).post(jobs::submit_job),
         )
         .route("/api/jobs/{id}", get(jobs::get_job))
+        .route("/api/jobs/{id}/result", get(jobs::download_result))
         .route("/api/jobs/{id}/cancel", post(jobs::cancel_job))
         .route(
             "/api/projects/{id}/chains",

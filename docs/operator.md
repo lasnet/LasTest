@@ -67,7 +67,7 @@ lastest --data-dir /data restore --from ./backup-2026-11-15 --force
 | `subdomains.discover` | домены из scope/явно | подтверждённые A/AAAA имена и IP; wildcard, rejected, страницы и квоты в артефакте |
 | `subdomains.subfinder` | домены из scope/явно, источники; A/AAAA всегда | подтверждённые host, DNS/IP-наблюдения, subdomains artifact |
 | `dns.records` | цели + типы A/AAAA/CNAME/MX/NS/TXT/PTR | DNS-наблюдения, IP-связи, артефакт |
-| `dns.wordlist` | домен, ID встроенного или загруженного словаря, concurrency=10/20/50/100 (default 20); words через API | найденные хосты, wildcard-диагностика |
+| `dns.wordlist` | домен, ID встроенного или загруженного словаря, concurrency=4/8/16 (default 8), rate_limit=50, resolver=dedicated/system; words через API | найденные хосты, wildcard-диагностика |
 | `reverse.ip` | явные IP; `sources` = ptr/shodan_internetdb/censys или legacy `providers` | кандидаты с происхождением, PTR, отдельно Shodan InternetDB/Censys, проверка A/AAAA |
 | `assets.enrich` | project-local candidate_ids/asset_ids или committed-вход цепочки; `http_enrichment` (default false) | снимок enrichment: DNS, HTTP, порты (confirmed/passive), сеть, технологии |
 | `assets.classify` | project-local кандидаты/активы или committed-вход цепочки | группы технологий, категории, surface hints, confidence/interest и evidence |
@@ -89,7 +89,7 @@ lastest --data-dir /data restore --from ./backup-2026-11-15 --force
 
 Ключи принадлежат всей установке. Добавляйте и заменяйте их в **Administration → Settings → API**. Сохранённый ключ применяется при старте следующей задачи и имеет приоритет над TOML/env. Для Censys в Settings вводится Platform PAT. Резервные способы настройки и хранение описаны в [инструкции по установке](install.md#конфигурация). Открытие каталога, Assets или отчёта не выполняет сетевых запросов.
 
-Чтобы использовать свой список в dnsmap, загрузите TXT и задайте имя в **Settings → WordList**. Затем в настройках **Subdomain Enumeration** включите dnsmap, выберите список и сохраните настройки модуля.
+Чтобы использовать свой список в dnsx, загрузите TXT и задайте имя в **Settings → WordList**. Затем в настройках **Subdomain Enumeration** включите dnsx, выберите список и сохраните настройки модуля.
 
 Ограничения контура: нет полного языка/каталога шаблонов Nuclei, браузерного JS-обхода, расписаний, OSINT/phishing-заглушек, сырых пакетов Nmap, OS detection и NSE. Импорт исторических Nuclei findings поддерживается.
 

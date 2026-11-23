@@ -14,8 +14,10 @@ fi
 
 API="laste2e-api-$$"
 WORKER="laste2e-worker-$$"
+DNS="laste2e-dns-$$"
 VOLUME="laste2e-data-$$"
 NETWORK="laste2e-net-$$"
+ACCESS_NETWORK="laste2e-access-$$"
 PORT="${LASTEST_E2E_PORT:-$(python3 - <<'PY'
 import socket
 s = socket.socket()
@@ -28,9 +30,10 @@ PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 BASE="http://127.0.0.1:${PORT}"
 
 cleanup() {
-  docker rm -f "$API" "$WORKER" >/dev/null 2>&1 || true
+  docker rm -f "$API" "$WORKER" "$DNS" >/dev/null 2>&1 || true
   docker volume rm "$VOLUME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  docker network rm "$ACCESS_NETWORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
@@ -51,20 +54,51 @@ cli() {
 }
 
 echo "[1/9] isolated network and volume"
-docker network create "$NETWORK" >/dev/null
+docker network create --internal "$NETWORK" >/dev/null
+docker network create "$ACCESS_NETWORK" >/dev/null
 docker volume create "$VOLUME" >/dev/null
 
 echo "[2/9] start serve and worker as unprivileged processes"
-docker run -d --name "$API" --network "$NETWORK" --network-alias api.lastest.test \
+docker run -d --name "$API" --network "$ACCESS_NETWORK" \
   -p "127.0.0.1:${PORT}:8080" \
   -v "${VOLUME}:/data" \
   -e LASTEST_DATA_DIR=/data -e LASTEST_BIND=0.0.0.0:8080 \
   -e LASTEST_INTERNAL_RANGES=172.16.0.0/12 -e LASTEST_LOG_LEVEL=warn \
   --read-only --tmpfs /tmp:size=64m,mode=1777 --cap-drop ALL \
   --security-opt no-new-privileges:true "$LASTEST_IMAGE" serve >/dev/null
+docker network connect --alias api.lastest.test "$NETWORK" "$API"
+API_IP="$(docker inspect "$API" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"][sys.argv[1]]["IPAddress"])' "$NETWORK")"
+DNS_CODE="$(cat <<'PY'
+import asyncio,os,socket,struct
+class DNS(asyncio.DatagramProtocol):
+    def connection_made(self,transport): self.transport=transport
+    def datagram_received(self,packet,peer):
+        offset=12; labels=[]
+        while packet[offset]:
+            size=packet[offset]; offset+=1
+            labels.append(packet[offset:offset+size].decode().lower()); offset+=size
+        offset+=1; kind,cls=struct.unpack('!HH',packet[offset:offset+4]); end=offset+4
+        exists='.'.join(labels)=='api.lastest.test'
+        data=socket.inet_aton(os.environ['API_IP']) if exists and kind==1 else None
+        answer=b'' if data is None else b'\xc0\x0c'+struct.pack('!HHIH',1,1,60,4)+data
+        response=packet[:2]+struct.pack('!HHHHH',0x8180 if exists else 0x8183,1,int(data is not None),0,0)+packet[12:end]+answer
+        self.transport.sendto(response,peer)
+async def main():
+    await asyncio.get_running_loop().create_datagram_endpoint(DNS,local_addr=('0.0.0.0',5353))
+    await asyncio.Future()
+asyncio.run(main())
+PY
+)"
+docker run -d --name "$DNS" --network "$NETWORK" --user 10001:10001 \
+  --read-only --tmpfs /tmp:size=16m --cap-drop ALL --security-opt no-new-privileges:true \
+  -e "API_IP=$API_IP" \
+  "${LASTEST_DNS_FIXTURE_IMAGE:-python@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89}" \
+  python -u -c "$DNS_CODE" >/dev/null
+DNS_IP="$(docker inspect "$DNS" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"][sys.argv[1]]["IPAddress"])' "$NETWORK")"
 docker run -d --name "$WORKER" --network "$NETWORK" \
   -v "${VOLUME}:/data" \
   -e LASTEST_DATA_DIR=/data -e LASTEST_INTERNAL_RANGES=172.16.0.0/12 \
+  -e "LASTEST_DNS_WORDLIST_RESOLVER=$DNS_IP:5353" \
   -e LASTEST_LOG_LEVEL=warn --read-only --tmpfs /tmp:size=64m,mode=1777 \
   --cap-drop ALL --security-opt no-new-privileges:true "$LASTEST_IMAGE" worker >/dev/null
 wait_ready
@@ -113,10 +147,10 @@ if [[ "$STATUS" != "succeeded" ]]; then
   exit 1
 fi
 
-echo "[6/9] run dnsmap against the isolated API's DNS alias"
+echo "[6/9] run dnsx against the isolated API's DNS alias"
 DNS_JOB_JSON="$(cli job submit --project "$PROJECT_ID" --task-type dns.wordlist \
-  --params '{"domain":"lastest.test","words":["api"],"concurrency":10}' \
-  --idempotency-key e2e-dnsmap-1)"
+  --params '{"domain":"lastest.test","words":["api"],"concurrency":8}' \
+  --idempotency-key e2e-dnsx-1)"
 DNS_JOB_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["id"])' <<<"$DNS_JOB_JSON")"
 DNS_STATUS="queued"
 for _ in $(seq 1 60); do
@@ -126,11 +160,11 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [[ "$DNS_STATUS" != "succeeded" ]]; then
-  echo "dnsmap job finished with $DNS_STATUS" >&2
+  echo "dnsx job finished with $DNS_STATUS" >&2
   docker logs "$WORKER" >&2 || true
   exit 1
 fi
-python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; r=j["result"]; assert r["engine"]=="dnsmap" and r["concurrency"]==10 and r["found"]==["api.lastest.test"]; assert j["artifacts"]' <<<"$DNS_STATUS_JSON"
+python3 -c 'import json,sys; j=json.load(sys.stdin)["job"]; r=j["result"]; assert r["engine"]=="dnsx" and r["concurrency"]==8 and r["found"]==["api.lastest.test"]; assert j["artifacts"]' <<<"$DNS_STATUS_JSON"
 
 echo "[7/9] dashboard and report use persisted observations"
 cli report export --project "$PROJECT_ID" --format json --output /tmp/report.json
@@ -144,7 +178,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" \
   "${BASE}/api/projects/${PROJECT_ID}/dashboard" >/dev/null
 DNS_ARTIFACT_HREF="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job"]["artifacts"][0]["href"])' <<<"$DNS_STATUS_JSON")"
 curl -fsS -H "Authorization: Bearer $TOKEN" "${BASE}${DNS_ARTIFACT_HREF}" \
-  | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["format_version"]=="1" and r["engine"]=="dnsmap" and r["found"]==["api.lastest.test"]'
+  | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["format_version"]=="1" and r["engine"]=="dnsx" and r["found"]==["api.lastest.test"]'
 
 echo "[8/9] restart both processes and verify history survives"
 docker restart "$WORKER" >/dev/null
@@ -174,9 +208,9 @@ ruby -rjson -e '
     plugins.dig("Jenkins", "version") == ["2.516.1"] && plugins.dig("JQuery", "version") == ["3.7.1"]
 '
 SH
-cli task-types | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["limitations"]["max_concurrent_jobs"]==4; items=d["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"]); dns=next(item for item in items if item["name"]=="dns.wordlist"); assert dns["params_schema"]["properties"]["concurrency"]=={"type":"integer","enum":[10,20,50,100],"default":20}; assert dns["limits"]["timeout_seconds"]==7200'
+cli task-types | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["limitations"]["max_concurrent_jobs"]==4; items=d["task_types"]; assert all(any(item["name"]==name and item["available"] for item in items) for name in ["subdomains.subfinder", "dns.wordlist"]); dns=next(item for item in items if item["name"]=="dns.wordlist"); assert dns["params_schema"]["properties"]["concurrency"]=={"type":"integer","enum":[4,8,16],"default":8}; assert dns["limits"]["timeout_seconds"]==7200'
 docker run --rm --entrypoint sh "$LASTEST_IMAGE" -eu -c \
-  '! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'
+  'command -v dnsx && ! command -v dnsmap && ! command -v go && ! command -v cargo && ! command -v python3 && ! command -v gcc'
 IMAGE_USER="$(docker image inspect --format '{{.Config.User}}' "$LASTEST_IMAGE")"
 if [[ "$IMAGE_USER" != "10001:10001" ]]; then
   echo "unexpected runtime user: $IMAGE_USER" >&2

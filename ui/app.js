@@ -659,7 +659,7 @@
       const heading = el("div");
       if (module) heading.appendChild(el("p", module.title, "muted"));
       heading.appendChild(el("strong", job.task_type));
-      const status = jobStatusBadge(job.status);
+      const status = jobStatusBadge(job.status, job.result);
       append(head, heading, status);
       card.appendChild(head);
       if (job.finished_at) {
@@ -672,6 +672,10 @@
         details.appendChild(append(counter, el("dt", label), el("dd", countLabel.format(count || 0))));
       }
       card.appendChild(details);
+      if (job.task_type === "dns.wordlist" && job.status === "queued") card.appendChild(el("p", "Wordlist waits for other checks to finish and for the single wordlist slot.", "muted"));
+      if (job.result?.engine === "dnsx") {
+        card.appendChild(el("p", `Checked ${countLabel.format(job.result.checked || 0)} · Found ${countLabel.format(job.result.found?.length || 0)} · Remaining ${countLabel.format(job.result.unprocessed || 0)} · DNS limit ${job.result.rate_limit}/s`, "muted"));
+      }
       if (job.error || (Array.isArray(job.result?.errors) && job.result.errors.length)) {
         const diagnostics = el("details", null, "job-error-details");
         diagnostics.open = state.jobErrorsOpen.has(job.id);
@@ -705,6 +709,11 @@
         });
         actions.appendChild(cancel);
       }
+      if (job.result?.engine === "dnsx" && job.result.checkpointed && !job.artifacts?.length) {
+        const saved = el("a", "Download saved result", "link");
+        saved.href = `/api/jobs/${encodeURIComponent(job.id)}/result`;
+        actions.appendChild(saved);
+      }
       if (job.artifacts?.length) {
         for (const artifact of job.artifacts) {
           const link = el("a", `${artifact.kind} (${artifact.size} B)`, "link");
@@ -731,7 +740,12 @@
     return { succeeded: "Completed", partial: "Completed", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted", queued: "Queued", running: "Running" }[status] || status;
   }
 
-  function jobStatusBadge(status) {
+  function jobStatusBadge(status, result = {}) {
+    if (result.engine === "dnsx" && result.partial && ["partial", "interrupted"].includes(status)) {
+      const badge = el("span", "Incomplete", "badge warn");
+      badge.title = "Verified results are saved. Some names remain unprocessed; see the wordlist progress and artifact.";
+      return badge;
+    }
     const badge = el("span", jobStatusLabel(status), `badge ${status === "partial" ? "ok" : statusClass(status)}`);
     if (status === "partial") badge.title = "Execution completed. Some checks reported errors; see the Errors counter and details in Job history.";
     return badge;
@@ -802,7 +816,7 @@
     clear(jobsNode);
     jobsNode.appendChild(table(["Task", "Status", "Finished"], state.dashboard.jobs || [], (job, column) => {
       if (column === "Task") return job.task_type;
-      if (column === "Status") return jobStatusBadge(job.status);
+      if (column === "Status") return jobStatusBadge(job.status, job.result);
       return job.finished_at || job.created_at;
     }));
 
@@ -1659,7 +1673,7 @@
     { id: "subdomains", title: "Subdomain Enumeration", family: "recon", mode: "Passive Recon", tone: "green",
       tasks: ["subdomains.subfinder", "subdomains.discover", "dns.records", "dns.wordlist"],
       description: "Find subdomains with Subfinder, Certificate Transparency or a DNS wordlist, and query DNS records for names in Scope. Only names with confirmed A/AAAA records are added to Assets. Names without addresses stay in job artifacts. Scope exclusions apply.",
-      planned: "Subdomain-only ffuf. Subfinder and dnsmap wordlist discovery are available." },
+      planned: "Subdomain-only ffuf. Subfinder and dnsx wordlist discovery are available." },
     { id: "assets", title: "Asset Discovery", family: "recon", mode: "Passive Recon", tone: "yellow",
       tasks: ["reverse.ip"],
       description: "Enrich project Assets using their DNS names and IP addresses, passive reverse-IP sources, DNS verification and local classification.",
@@ -1771,7 +1785,7 @@
   const scanFieldLabels = {
     domains: "Domains", targets: "Targets", domain: "Domain", ips: "IP addresses",
     sources: "Sources", resolve: "Resolve IP addresses", providers: "Providers",
-    record_types: "DNS record types", wordlist: "Wordlist", concurrency: "Parallel workers", words: "Wordlist", mode: "Scan mode", seeds: "Starting URLs",
+    record_types: "DNS record types", wordlist: "Wordlist", concurrency: "Parallel lookups", rate_limit: "DNS requests per second", resolver: "DNS resolver", words: "Wordlist", mode: "Scan mode", seeds: "Starting URLs",
     base_urls: "Base URLs", ports: "TCP ports", max_pages: "Maximum pages",
     max_depth: "Maximum depth", proxy_profile: "SOCKS5 profile", cookie_names: "Session cookie names", limit: "Maximum URLs",
   };
@@ -1796,6 +1810,11 @@
   function defaultScanParams(task) {
     const params = { ...(scanParams.get(task.name) || {}) };
     const domains = scopeScanDomains();
+    if (task.name === "dns.wordlist") {
+      for (const [key, property] of Object.entries(task.params_schema.properties || {})) {
+        if (params[key] === undefined && property.default !== undefined) params[key] = property.default;
+      }
+    }
     if (task.name === "reverse.ip" && !params.sources) params.sources = ["ptr", "shodan_internetdb"];
     if (scanModules.find((module) => module.id === "subdomains").tasks.includes(task.name)) {
       for (const key of Object.keys(task.params_schema.properties || {})) {
@@ -2015,7 +2034,7 @@
             input = el("select");
             for (const option of property.enum) {
               const list = key === "wordlist" ? state.dnsWordlists.find(({ id }) => id === option) : null;
-              const label = list ? `${list.name} (${countLabel.format(list.entries)} entries)` : option;
+              const label = list ? `${list.name} (${countLabel.format(list.entries)} entries)` : key === "resolver" ? ({dedicated:`Dedicated DNS (${task.limits?.resolver || "installation default"})`,system:"System DNS"}[option] || option) : option;
               input.appendChild(new Option(label, option));
             }
             input.value = property.enum.includes(params[key]) ? params[key] : property.default ?? property.enum[0];
@@ -2025,8 +2044,8 @@
               input.type = "checkbox";
               input.checked = params[key] ?? key === "resolve";
             } else {
-              if (property.type === "integer") { input.type = "number"; input.min = property.minimum ?? 0; }
-              input.value = Array.isArray(params[key]) ? params[key].join(input.tagName === "TEXTAREA" ? "\n" : ", ") : params[key] ?? "";
+              if (property.type === "integer") { input.type = "number"; input.min = property.minimum ?? 0; if (property.maximum !== undefined) input.max = property.maximum; }
+              input.value = Array.isArray(params[key]) ? params[key].join(input.tagName === "TEXTAREA" ? "\n" : ", ") : params[key] ?? property.default ?? "";
               if (input.tagName === "TEXTAREA") input.rows = subdomainSettings ? 1 : 2;
               input.placeholder = task.params_schema.required?.includes(key) ? "Required" : "Use task defaults";
             }
@@ -2055,7 +2074,9 @@
           }
           const help = {
             wordlist: "Upload additional DNS wordlists in Settings → WordList.",
-            concurrency: "Run 10, 20, 50 or 100 dnsmap processes in parallel. Default: 20. Higher values increase DNS traffic.",
+            concurrency: "Parallel names in one dnsx process. Default: 8. The DNS request rate also applies to A/AAAA, retries and wildcard checks.",
+            rate_limit: "Maximum outgoing DNS requests per second for this wordlist. Default: 50. A and AAAA count separately. Lower values reduce DNS load.",
+            resolver: "Dedicated uses the installation’s wordlist DNS server. System uses the worker’s configured system DNS. The request limit applies to both.",
             record_types: "A: IPv4 · AAAA: IPv6 · CNAME: aliases · MX: mail servers · NS: name servers · TXT: text records. Selected types are saved in the records artifact; A/AAAA are always checked for Assets.",
           };
           if (help[key] && !(subdomainSettings && key === "record_types")) {
@@ -2178,7 +2199,7 @@
     $("#scan-error").textContent = "";
     const submitted = [];
     try {
-      for (const { task_type, params, asset_ids } of tasks.values()) {
+      for (const { task_type, params, asset_ids } of [...tasks.values()].sort((a,b) => Number(a.task_type === "dns.wordlist") - Number(b.task_type === "dns.wordlist"))) {
         const fingerprint = JSON.stringify({ projectId, task_type, params, asset_ids });
         if (!submissionKeys.has(fingerprint)) {
           const bytes = crypto.getRandomValues(new Uint8Array(16));

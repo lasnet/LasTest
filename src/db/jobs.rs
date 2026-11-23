@@ -280,15 +280,21 @@ impl Db {
         // within a second instead of sorting random UUIDs.
         let candidate: Option<String> = tx
             .query_row(
-                "SELECT j.id FROM jobs j
+                "WITH ready AS (SELECT j.*, j.rowid AS submission_order FROM jobs j
                  WHERE j.status = 'queued' AND j.archived = 0
                    AND (j.chain_run_id IS NULL OR NOT EXISTS (
                        SELECT 1 FROM jobs p
                        WHERE p.chain_run_id = j.chain_run_id
                          AND p.chain_order < j.chain_order
                          AND p.status IN ('queued','running')
-                   ))
-                 ORDER BY j.created_at, j.rowid LIMIT 1",
+                   )))
+                 SELECT j.id FROM ready j
+                 WHERE j.task_type != 'dns.wordlist' OR (
+                     NOT EXISTS (SELECT 1 FROM jobs a WHERE a.status = 'running' AND a.archived = 0)
+                     AND NOT EXISTS (SELECT 1 FROM ready r WHERE r.task_type != 'dns.wordlist')
+                 )
+                 ORDER BY CASE WHEN j.task_type = 'dns.wordlist' THEN 1 ELSE 0 END,
+                          j.created_at, j.submission_order LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -379,11 +385,55 @@ impl Db {
         Ok(changed > 0)
     }
 
+    /// Read cancellation/fencing without waiting for the lease heartbeat or
+    /// loading a potentially large checkpoint result.
+    pub fn attempt_control(
+        &self,
+        job_id: &str,
+        attempt_id: &str,
+    ) -> Result<Option<HeartbeatState>> {
+        Ok(self
+            .connect()?
+            .query_row(
+                "SELECT CASE WHEN status='running' AND current_attempt_id=?2 THEN 1 ELSE 0 END,
+                    cancel_requested FROM jobs WHERE id=?1",
+                params![job_id, attempt_id],
+                |row| {
+                    Ok(HeartbeatState {
+                        active: row.get(0)?,
+                        cancel_requested: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     pub fn complete_attempt(
         &self,
         job_id: &str,
         attempt_id: &str,
         outcome: CompleteOutcome,
+    ) -> Result<bool> {
+        self.publish_attempt(job_id, attempt_id, outcome, true)
+    }
+
+    /// Persist a running wordlist's verified observations and result without
+    /// relinquishing its queue slot. The caller sends observations only once.
+    pub fn checkpoint_attempt(
+        &self,
+        job_id: &str,
+        attempt_id: &str,
+        outcome: CompleteOutcome,
+    ) -> Result<bool> {
+        self.publish_attempt(job_id, attempt_id, outcome, false)
+    }
+
+    fn publish_attempt(
+        &self,
+        job_id: &str,
+        attempt_id: &str,
+        outcome: CompleteOutcome,
+        finish: bool,
     ) -> Result<bool> {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -524,6 +574,18 @@ impl Db {
             &outcome.enrichments,
             &outcome.classifications,
         )?;
+        if !finish {
+            tx.execute(
+                "UPDATE jobs SET result=?1, counters=?2 WHERE id=?3",
+                params![
+                    outcome.result.to_string(),
+                    serde_json::to_string(&outcome.counters)?,
+                    job_id
+                ],
+            )?;
+            tx.commit()?;
+            return Ok(true);
+        }
         tx.execute(
             "UPDATE jobs SET status = ?1, finished_at = ?2, error = ?3, result = ?4,
                              counters = ?5, current_attempt_id = NULL, cancel_requested = 0

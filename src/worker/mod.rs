@@ -68,6 +68,7 @@ impl Worker {
         let mut poll =
             tokio::time::interval(Duration::from_millis(self.config.worker_poll_ms.max(1)));
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut reaped_at = std::time::Instant::now();
         let mut result = async {
             while !shutdown.load(Ordering::SeqCst) {
                 while active.len() < self.config.max_concurrent_jobs as usize
@@ -94,7 +95,13 @@ impl Worker {
                             completed.context("job execution panicked")??;
                         }
                     }
-                    _ = poll.tick() => self.db.worker_heartbeat(&self.worker_id)?,
+                    _ = poll.tick() => {
+                        self.db.worker_heartbeat(&self.worker_id)?;
+                        if reaped_at.elapsed() >= Duration::from_secs(self.config.worker_lease_seconds.max(1) as u64) {
+                            self.db.interrupt_expired_attempts()?;
+                            reaped_at = std::time::Instant::now();
+                        }
+                    },
                     _ = wait_for_shutdown(shutdown.clone()) => {}
                 }
             }
@@ -215,7 +222,27 @@ impl Worker {
         let mut result = tasks::execute(&job, &ctx).await;
         let was_cancelled = cancel.load(Ordering::SeqCst) || shutdown.load(Ordering::SeqCst);
         if was_cancelled {
-            result = Err(anyhow::Error::new(TaskCancelled));
+            if let Ok(outcome) = &mut result {
+                if job.task_type == "dns.wordlist" && outcome.result["checkpointed"] == true {
+                    outcome.status = JobStatus::Cancelled;
+                    outcome.error = Some(
+                        "cancelled by operator or worker shutdown; verified results retained"
+                            .into(),
+                    );
+                    outcome.result["partial"] = serde_json::json!(true);
+                    outcome.result["complete"] = serde_json::json!(false);
+                    outcome.result["stop_reason"] = serde_json::json!("cancelled");
+                    for artifact in &mut outcome.artifacts {
+                        if artifact.kind == "dns_wordlist" {
+                            artifact.content = serde_json::to_vec_pretty(&outcome.result)?;
+                        }
+                    }
+                } else {
+                    result = Err(anyhow::Error::new(TaskCancelled));
+                }
+            } else {
+                result = Err(anyhow::Error::new(TaskCancelled));
+            }
         }
         cancel.store(true, Ordering::SeqCst);
         heartbeat.abort();
@@ -229,10 +256,24 @@ impl Worker {
                     }
                 }
                 Err(err) => {
+                    let saved = if job.task_type == "dns.wordlist" {
+                        self.db
+                            .job_by_id(&job.id)?
+                            .filter(|job| job.result["checkpointed"] == true)
+                    } else {
+                        None
+                    };
+                    let mut result = saved
+                        .as_ref()
+                        .map(|job| job.result.clone())
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    result["artifact_error"] = serde_json::json!(true);
+                    result["partial"] = serde_json::json!(true);
+                    result["complete"] = serde_json::json!(false);
                     let outcome = CompleteOutcome {
                         status: JobStatus::Failed,
-                        result: serde_json::json!({"artifact_error": true}),
-                        counters: JobCounters::default(),
+                        result,
+                        counters: saved.map(|job| job.counters).unwrap_or_default(),
                         error: Some(format!("artifact publication failed: {err:#}")),
                         observations: Vec::new(),
                         findings: Vec::new(),
@@ -254,10 +295,26 @@ impl Worker {
                 } else {
                     (JobStatus::Failed, format!("{err:#}"))
                 };
+                let checkpoint = if job.task_type == "dns.wordlist" {
+                    self.db
+                        .job_by_id(&job.id)?
+                        .filter(|job| job.result["checkpointed"] == true)
+                } else {
+                    None
+                };
+                let mut result = checkpoint
+                    .as_ref()
+                    .map(|job| job.result.clone())
+                    .unwrap_or_else(|| serde_json::json!({"cancelled": cancelled}));
+                if checkpoint.is_some() {
+                    result["partial"] = serde_json::json!(true);
+                    result["complete"] = serde_json::json!(false);
+                    result["stop_reason"] = serde_json::json!(message);
+                }
                 let outcome = CompleteOutcome {
                     status,
-                    result: serde_json::json!({"cancelled": cancelled}),
-                    counters: JobCounters::default(),
+                    result,
+                    counters: checkpoint.map(|job| job.counters).unwrap_or_default(),
                     error: Some(message),
                     observations: Vec::new(),
                     findings: Vec::new(),
