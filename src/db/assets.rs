@@ -1,4 +1,5 @@
 //! Project inventory derived from stored observations, without new DNS requests.
+use super::discovery::{inventory_candidates, inventory_classifications};
 use super::{insert_audit, json_or_empty, Db};
 use crate::scope::normalize_domain;
 use anyhow::Result;
@@ -215,24 +216,47 @@ fn inventory(assets: &[Asset], observations: &[Observation]) -> Vec<InventoryRow
     rows
 }
 
+fn search_inventory(
+    assets: &[Asset],
+    observations: &[Observation],
+    search: &str,
+) -> Vec<InventoryRow> {
+    let query = search.trim().to_lowercase();
+    let mut rows = inventory(assets, observations);
+    if !query.is_empty() {
+        rows.retain(|row| {
+            row.host
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains(&query)
+                || row.ips.iter().any(|ip| ip.to_lowercase().contains(&query))
+        });
+    }
+    rows
+}
+
 impl Db {
     pub fn inventory_rows(&self, project_id: &str, search: &str) -> Result<Vec<InventoryRow>> {
         let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         let (assets, observations) = snapshot(&tx, project_id)?;
-        let query = search.trim().to_lowercase();
-        let rows = inventory(&assets, &observations)
-            .into_iter()
-            .filter(|row| {
-                row.host
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_lowercase()
-                    .contains(&query)
-                    || row.ips.iter().any(|ip| ip.to_lowercase().contains(&query))
-            })
-            .collect();
+        let rows = search_inventory(&assets, &observations, search);
         tx.commit()?;
+        Ok(rows)
+    }
+
+    pub fn list_asset_urls(&self, project_id: &str, limit: u32) -> Result<Vec<Value>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT value, last_seen FROM assets
+             WHERE project_id = ?1 AND kind = 'url' ORDER BY canonical_value LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id, limit], |row| {
+                Ok(json!({ "value": row.get::<_, String>(0)?, "last_seen": row.get::<_, String>(1)? }))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
@@ -336,20 +360,54 @@ impl Db {
         provider: Option<&str>,
         category: Option<&str>,
     ) -> Result<Vec<InventoryRow>> {
-        let mut rows = self.inventory_rows(project_id, search)?;
+        // Build the inventory and its metadata from the same project snapshot.
+        // Loading metadata once avoids opening multiple connections per row.
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        let (assets, observations) = snapshot(&tx, project_id)?;
+        let mut rows = search_inventory(&assets, &observations, search);
+        if rows.is_empty() {
+            return Ok(rows);
+        }
+        let canonical_by_id: BTreeMap<_, _> = assets
+            .iter()
+            .filter(|asset| asset.kind == "host")
+            .map(|asset| (asset.id.as_str(), asset.canonical.as_str()))
+            .collect();
+        let classifications = inventory_classifications(&tx, project_id)?;
+        let mut classification_by_asset = BTreeMap::new();
+        let mut classification_by_host = BTreeMap::new();
+        for classification in &classifications {
+            if let Some(id) = classification["subject_id"]
+                .as_str()
+                .filter(|_| classification["subject_type"] == "asset")
+            {
+                classification_by_asset.insert(id, classification);
+            }
+            if let Some(host) = classification["host"].as_str() {
+                classification_by_host.entry(host).or_insert(classification);
+            }
+        }
+        let candidates = inventory_candidates(&tx, project_id)?;
+        let mut candidate_by_asset = BTreeMap::new();
+        let mut candidate_by_host = BTreeMap::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            if let Some(id) = candidate["asset_id"].as_str() {
+                candidate_by_asset.entry(id).or_insert(index);
+            }
+            if let Some(host) = candidate["hostname"].as_str() {
+                candidate_by_host.insert(host, index);
+            }
+        }
+        tx.commit()?;
         for row in &mut rows {
-            let host = row.host.clone().unwrap_or_default();
-            let classification = self
-                .classification_for(project_id, "asset", &row.id)?
-                .or_else(|| {
-                    if host.is_empty() {
-                        None
-                    } else {
-                        self.classification_for_host(project_id, &host)
-                            .ok()
-                            .flatten()
-                    }
-                });
+            let host = row.host.as_deref().unwrap_or_default();
+            let classification = classification_by_asset.get(row.id.as_str()).or_else(|| {
+                row.host
+                    .as_deref()
+                    .filter(|host| !host.is_empty())
+                    .and_then(|host| classification_by_host.get(host))
+            });
             if let Some(classification) = classification {
                 let strings = |value: &Value| {
                     value
@@ -379,10 +437,22 @@ impl Db {
                 row.interest = classification["interest"].as_str().map(str::to_string);
             }
             if !host.is_empty() {
-                if let Some(candidate) = self
-                    .candidate_for_asset(project_id, &row.id)?
-                    .or_else(|| self.candidate_by_host(project_id, &host).ok().flatten())
-                {
+                // The existing lookup prefers the most recent candidate linked
+                // by asset ID or matching the asset's canonical hostname.
+                let candidate = candidate_by_asset
+                    .get(row.id.as_str())
+                    .into_iter()
+                    .chain(
+                        canonical_by_id
+                            .get(row.id.as_str())
+                            .and_then(|host| candidate_by_host.get(host)),
+                    )
+                    .min()
+                    .or_else(|| {
+                        host_key(host).and_then(|host| candidate_by_host.get(host.as_str()))
+                    });
+                if let Some(&index) = candidate {
+                    let candidate = &candidates[index];
                     row.providers = candidate["sources"]
                         .as_array()
                         .map(|items| {

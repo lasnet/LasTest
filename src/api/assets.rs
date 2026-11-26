@@ -129,6 +129,21 @@ pub async fn list(
     )))
 }
 
+pub async fn urls(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let session = authenticate(&state, &headers)?;
+    require(&session, Role::Viewer)?;
+    let project = resolve_project(&state, &id)?;
+    let items = state
+        .db
+        .list_asset_urls(&project.id, 300)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "items": items })))
+}
+
 pub async fn detail(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

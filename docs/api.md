@@ -66,6 +66,7 @@
 | `POST /chains/{id}/cancel` | analyst | отмена незавершённых стадий |
 | `GET /projects/{id}/dashboard` | viewer | метрики, источники, покрытие правил |
 | `GET /projects/{id}/assets?q=&offset=&technology=&provider=&category=` | viewer | общая таблица хостов и IP, поиск, фильтры, страницы по 10 строк |
+| `GET /projects/{id}/assets/urls` | viewer | до 300 сохранённых URL проекта в порядке канонического адреса, поля `value` и `last_seen` в `items` |
 | `GET /projects/{id}/assets/{asset_id}` | viewer | карточка из сохранённых данных: DNS, HTTP, порты, сеть, candidate, enrichment, classification |
 | `GET /projects/{id}/assets/export/{txt|csv}?q=&technology=&provider=&category=` | viewer | все строки таблицы с учётом поиска и фильтров |
 | `DELETE /projects/{id}/assets/{asset_id}` | analyst | удаление хоста или отдельного IP с аудитом |

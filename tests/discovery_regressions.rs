@@ -255,6 +255,7 @@ async fn existing_host_assets_retain_http_and_explicit_selection_never_falls_bac
     );
     let mut other = TaskOutcome::new();
     other.candidate(NewCandidate::new("other.allowed.test", "ptr", "ptr"));
+    other.candidate(NewCandidate::new("chosen.allowed.test", "ptr", "ptr"));
     publish(&ctx, other);
     let asset = ctx
         .db
@@ -281,6 +282,14 @@ async fn existing_host_assets_retain_http_and_explicit_selection_never_falls_bac
         .classifications
         .iter()
         .any(|c| c.subject_type == "service"));
+    publish(&ctx, outcome);
+    let filtered = ctx
+        .db
+        .inventory_rows_filtered(&ctx.project_id, "", Some("WORDPRESS"), Some("ptr"), None)
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].host.as_deref(), Some("chosen.allowed.test"));
+    assert_eq!(filtered[0].groups, ["wordpress"]);
     let enriched = asset_enrich::run(&make_job("assets.enrich", params), &ctx)
         .await
         .unwrap();

@@ -253,6 +253,16 @@ const CANDIDATE_SELECT: &str = "SELECT c.id, c.project_id, c.hostname, c.first_s
     FROM discovery_candidates c LEFT JOIN asset_classifications cc
       ON cc.project_id = c.project_id AND cc.subject_type = 'candidate' AND cc.subject_id = c.id";
 
+pub(super) fn inventory_candidates(conn: &Connection, project_id: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare(&format!(
+        "{CANDIDATE_SELECT} WHERE c.project_id = ?1 ORDER BY c.last_seen DESC"
+    ))?;
+    let rows = stmt
+        .query_map([project_id], candidate_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CandidateFilter {
     pub query: String,
@@ -729,6 +739,29 @@ impl Db {
 const CLASSIFICATION_COLUMNS: &str = "id, project_id, subject_type, subject_id, host,
     catalog_version, confidence, interest, groups, categories, technologies, surface_hints,
     reasons, evidence, created_at, updated_at";
+
+pub(super) fn inventory_classifications(conn: &Connection, project_id: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT subject_type, subject_id, host, confidence, interest, groups, categories, technologies
+         FROM asset_classifications WHERE project_id = ?1 AND subject_type IN ('asset', 'candidate')
+         ORDER BY updated_at DESC, rowid DESC",
+    )?;
+    let rows = stmt
+        .query_map([project_id], |row| {
+            Ok(json!({
+                "subject_type": row.get::<_, String>(0)?,
+                "subject_id": row.get::<_, String>(1)?,
+                "host": row.get::<_, Option<String>>(2)?,
+                "confidence": row.get::<_, String>(3)?,
+                "interest": row.get::<_, String>(4)?,
+                "groups": json_or_empty(row.get::<_, String>(5)?),
+                "categories": json_or_empty(row.get::<_, String>(6)?),
+                "technologies": json_or_empty(row.get::<_, String>(7)?),
+            }))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
 
 fn classification_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     Ok(json!({

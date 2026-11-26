@@ -218,6 +218,31 @@ async fn selection_api_uses_only_project_assets_and_stored_urls() {
     let cookie = env.login_web().await;
     let headers = cookie_headers(&cookie);
     let base = format!("/api/projects/{}/jobs", project.id);
+    let (other_project, _) = env.project_with_scope("other-urls", vec![], false);
+    observe(
+        &env,
+        &other_project.id,
+        "url",
+        "https://elsewhere.example.test/other-project",
+        json!({}),
+    );
+    let urls = call(
+        &env.app,
+        Method::GET,
+        &format!("/api/projects/{}/assets/urls", project.id),
+        None,
+        &as_pairs(&headers),
+    )
+    .await;
+    assert_eq!(urls.status, StatusCode::OK, "{}", urls.text);
+    assert_eq!(
+        urls.body["items"],
+        json!([
+            {"value":"https://other.example.test/private","last_seen":"2026-11-22T00:00:00Z"},
+            {"value":"https://web.example.test/one","last_seen":"2026-11-22T00:00:00Z"},
+            {"value":"https://web.example.test/two","last_seen":"2026-11-22T00:00:00Z"}
+        ])
+    );
     let response = call(
         &env.app,
         Method::POST,

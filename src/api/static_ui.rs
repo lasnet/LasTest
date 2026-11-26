@@ -1,11 +1,12 @@
 use crate::api::{ApiResult, AppState};
 use crate::db::SCHEMA_VERSION;
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
-use std::sync::Arc;
+use sha2::{Digest, Sha256};
+use std::sync::{Arc, OnceLock};
 
 const INDEX: &str = include_str!("../../ui/index.html");
 const APP_JS: &str = include_str!("../../ui/app.js");
@@ -34,37 +35,67 @@ pub async fn index() -> Response {
     response
 }
 
-pub async fn app_js() -> Response {
-    javascript(APP_JS)
-}
-
-pub async fn theme_js() -> Response {
-    javascript(THEME_JS)
-}
-
-fn javascript(script: &'static str) -> Response {
-    let mut response = (
-        [(
-            header::CONTENT_TYPE,
-            "application/javascript; charset=utf-8",
-        )],
-        script,
+pub async fn app_js(headers: HeaderMap) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    static_asset(
+        &headers,
+        APP_JS.as_bytes(),
+        "application/javascript; charset=utf-8",
+        &ETAG,
     )
-        .into_response();
-    security_headers(&mut response);
-    response
 }
 
-pub async fn styles() -> Response {
-    let mut response =
-        ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLES).into_response();
-    security_headers(&mut response);
-    response
+pub async fn theme_js(headers: HeaderMap) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    static_asset(
+        &headers,
+        THEME_JS.as_bytes(),
+        "application/javascript; charset=utf-8",
+        &ETAG,
+    )
 }
 
-pub async fn instrument_sans() -> Response {
-    let mut response = ([(header::CONTENT_TYPE, "font/woff2")], INSTRUMENT_SANS).into_response();
+pub async fn styles(headers: HeaderMap) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    static_asset(
+        &headers,
+        STYLES.as_bytes(),
+        "text/css; charset=utf-8",
+        &ETAG,
+    )
+}
+
+pub async fn instrument_sans(headers: HeaderMap) -> Response {
+    static ETAG: OnceLock<String> = OnceLock::new();
+    static_asset(&headers, INSTRUMENT_SANS, "font/woff2", &ETAG)
+}
+
+fn static_asset(
+    request_headers: &HeaderMap,
+    body: &'static [u8],
+    content_type: &'static str,
+    etag: &OnceLock<String>,
+) -> Response {
+    let etag = etag.get_or_init(|| format!("\"{:x}\"", Sha256::digest(body)));
+    let matches = request_headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(',').map(str::trim))
+        .any(|value| value == "*" || value.strip_prefix("W/").unwrap_or(value) == etag);
+    let mut response = if matches {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, content_type)], body).into_response()
+    };
     security_headers(&mut response);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("public, no-cache"),
+    );
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
     response
 }
 

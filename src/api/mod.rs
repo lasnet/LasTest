@@ -288,6 +288,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(discovery::export),
         )
         .route("/api/projects/{id}/assets", get(assets::list))
+        .route("/api/projects/{id}/assets/urls", get(assets::urls))
         .route("/api/projects/{id}/assets/targets", get(assets::targets))
         .route(
             "/api/projects/{id}/assets/import-scope",

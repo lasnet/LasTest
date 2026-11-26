@@ -139,22 +139,36 @@ async fn cli_doctor_bootstrap_workflow_persistence_and_import_smoke() {
 
     let _serve = start_process(&data_dir, &bind, "serve");
     wait_ready(&base).await;
-    let html = reqwest::get(format!("{base}/"))
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
+    let html = reqwest::get(format!("{base}/")).await.unwrap();
+    assert_eq!(html.headers()["cache-control"], "no-store");
+    let html = html.text().await.unwrap();
     assert!(html.contains("login-view"));
     assert!(html.contains("Select a project"));
-    let js = reqwest::get(format!("{base}/app.js"))
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
+    let app_url = format!("{base}/app.js");
+    let js = reqwest::get(&app_url).await.unwrap();
+    assert_eq!(js.headers()["cache-control"], "public, no-cache");
+    let etag = js.headers()["etag"].clone();
+    let js = js.text().await.unwrap();
     assert!(js.contains("/api/auth/login"));
     assert!(!js.contains("mock data"));
+    let client = reqwest::Client::new();
+    let cached = client
+        .get(&app_url)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.headers()["etag"], etag);
+    assert!(cached.bytes().await.unwrap().is_empty());
+    let stale = client
+        .get(&app_url)
+        .header("if-none-match", "\"previous-version\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::OK);
+    assert_eq!(stale.text().await.unwrap(), js);
 
     let login = cli_json(
         &data_dir,

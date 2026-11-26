@@ -8,22 +8,20 @@
     project: null,
     dashboard: null,
     assets: null,
+    assetUrls: null,
     assetsQuery: "",
     assetsOffset: 0,
     assetsLoading: false,
-    assetsRequest: 0,
     assetFilters: { technology: "", provider: "", category: "" },
     candidates: null,
     candidatesQuery: "",
     candidateFilters: { source: "", dns_status: "", ip_match: "", scope_status: "", confidence: "", interest: "" },
     candidatesOffset: 0,
     candidatesLoading: false,
-    candidatesRequest: 0,
     candidateDetail: null,
     assetDetail: null,
     providers: {},
     discoveryHttpEnrichment: false,
-    targetCatalog: null,
     candidateDetailRequest: 0,
     assetDetailRequest: 0,
     deleteAsset: null,
@@ -35,11 +33,14 @@
     taskTypes: [],
     dnsWordlists: [],
     maxDnsWordlistBytes: 1024 * 1024,
-    jobs: [],
+    jobs: null,
     jobErrorsOpen: new Set(),
+    users: null,
+    audit: null,
+    settingsProviders: null,
     view: "dashboard",
-    poll: null,
-    loading: false,
+    assetsTab: "hosts",
+    settingsTab: "general",
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -166,13 +167,14 @@
       credentials: "same-origin",
       headers: { Accept: "application/json" },
       cache: "no-store",
+      signal: options.signal,
     };
     if (options.body !== undefined) {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(options.body);
     }
     const response = await fetch(path, init);
-    if (response.status === 401 && path !== "/api/auth/login") {
+    if (response.status === 401 && path !== "/api/auth/login" && !options.signal?.aborted) {
       showLogin();
       throw new Error("Session expired. Sign in again.");
     }
@@ -185,6 +187,53 @@
       throw new Error(message + code);
     }
     return payload;
+  }
+
+  const resources = new Map();
+  const projectResources = ["dashboard", "scope", "jobs", "assets", "asset-urls", "candidates", "target-catalog"];
+  const dataMaxAge = 30_000;
+
+  function invalidateResources(...names) {
+    for (const name of names) {
+      resources.get(name)?.controller.abort();
+      resources.delete(name);
+    }
+  }
+
+  function loadResource(name, path, apply, { force = false, onStart, onError, onFinish } = {}) {
+    const previous = resources.get(name);
+    if (previous?.path === path) {
+      if (previous.promise) return previous.promise;
+      if (!force && performance.now() - previous.loadedAt < dataMaxAge) return Promise.resolve();
+    }
+    invalidateResources(name);
+    const controller = new AbortController();
+    const { signal } = controller;
+    const resource = { path, controller, loadedAt: previous?.path === path ? previous.loadedAt : -Infinity };
+    resources.set(name, resource);
+    onStart?.();
+    resource.promise = (async () => {
+      try {
+        const value = await api(path, { signal });
+        if (signal.aborted) return;
+        apply?.(value);
+        resource.loadedAt = performance.now();
+        return value;
+      } catch (error) {
+        if (signal.aborted) return;
+        resource.loadedAt = -Infinity;
+        if (!onError) throw error;
+        onError(error);
+      } finally {
+        resource.promise = null;
+        if (!signal.aborted) onFinish?.();
+      }
+    })();
+    return resource.promise;
+  }
+
+  function sameContent(previous, next) {
+    return previous === next || JSON.stringify(previous) === JSON.stringify(next);
   }
 
   async function apiBytes(path) {
@@ -203,6 +252,19 @@
     $("#loading-view").hidden = true;
     notice("");
     $("#app-view").hidden = true;
+    stopPolling();
+    invalidateResources(...resources.keys());
+    resetProject("");
+    state.projects = [];
+    state.taskTypes = [];
+    state.providers = {};
+    state.dnsWordlists = [];
+    state.maxDnsWordlistBytes = 1024 * 1024;
+    state.users = state.audit = state.settingsProviders = null;
+    $("#users-list").replaceChildren();
+    $("#audit-list").replaceChildren();
+    $("#settings-wordlists").replaceChildren();
+    markForRender(renderUsers, renderAudit, renderSettingsProviders, renderSettingsWordlists, renderProviderCatalog);
     $("#login-view").hidden = false;
     $("#setup-form").hidden = true;
     $("#login-form").hidden = false;
@@ -211,7 +273,6 @@
     $("#provider-key-dialog").close();
     $("#wordlist-form").reset();
     $("#settings-providers").replaceChildren();
-    settingsProviderRequest++;
   }
 
   function showApp() {
@@ -220,15 +281,7 @@
     scanChoices.clear();
     scanParams.clear();
     submissionKeys.clear();
-    state.projectId = "";
-    state.project = null;
-    state.dashboard = null;
-    state.scope = null;
-    state.scopeHistory = [];
-    state.rules = [];
-    state.jobs = [];
-    state.jobErrorsOpen.clear();
-    $("#scope-note").value = "";
+    resetProject("");
     $("#login-view").hidden = true;
     $("#app-view").hidden = false;
     $("#current-user").replaceChildren(
@@ -250,7 +303,6 @@
       state.me = value.user;
       showApp();
       await loadProjects();
-      await loadTaskTypes();
       route();
     } catch (_) {
       showLogin();
@@ -265,14 +317,13 @@
   }
 
   async function loadProjects() {
+    const user = state.me;
     const value = await api("/api/projects?limit=500");
+    if (state.me !== user) return;
     state.projects = value.items || [];
-    if (!state.projectId) {
-      try {
-        state.projectId = localStorage.getItem(projectStorageKey()) || "";
-      } catch {
-        // The selector still works when browser storage is unavailable.
-      }
+    let projectId = state.projectId;
+    if (!projectId) {
+      try { projectId = localStorage.getItem(projectStorageKey()) || ""; } catch {}
     }
     const select = $("#project-select");
     clear(select);
@@ -282,15 +333,11 @@
       const label = `${project.name}${item.scope_status ? ` · scope ${item.scope_status}` : ""}`;
       select.appendChild(new Option(label, project.id));
     }
-    if (state.projectId && state.projects.some((item) => item.project.id === state.projectId)) {
-      select.value = state.projectId;
-      state.project = state.projects.find((item) => item.project.id === state.projectId).project;
-    } else {
-      state.projectId = "";
-      state.project = null;
-      select.value = "";
-      rememberProject();
-    }
+    const project = state.projects.find((item) => item.project.id === projectId)?.project ?? null;
+    if ((project?.id || "") !== state.projectId) resetProject(project?.id || "");
+    state.project = project;
+    select.value = state.projectId;
+    rememberProject();
     renderProjectCaption();
   }
 
@@ -315,39 +362,46 @@
       : "Project";
   }
 
-  async function loadTaskTypes() {
-    try {
-      const value = await api("/api/task-types");
-      state.taskTypes = value.task_types || [];
-      state.providers = value.providers || {};
-      state.dnsWordlists = value.dns_wordlists || [];
+  function loadTaskTypes(force = false) {
+    return loadResource("task-types", "/api/task-types", (value) => {
+      const taskTypes = value.task_types || [];
+      const providers = value.providers || {};
+      const wordlists = value.dns_wordlists || [];
+      if (!sameContent(state.taskTypes, taskTypes)) {
+        state.taskTypes = taskTypes;
+        markForRender(renderScanModules);
+      }
+      if (!sameContent(state.providers, providers)) {
+        state.providers = providers;
+        markForRender(renderProviderCatalog);
+      }
+      if (!sameContent(state.dnsWordlists, wordlists)) {
+        state.dnsWordlists = wordlists;
+        markForRender(renderSettingsWordlists);
+      }
       state.maxDnsWordlistBytes = value.limitations?.max_dns_wordlist_bytes ?? state.maxDnsWordlistBytes;
-      renderScanModules();
-      renderProviderCatalog();
-      renderSettingsWordlists();
-    } catch (error) {
-      renderSettingsWordlists(error);
-      notice(error.message, "error");
-    }
+    }, { force });
   }
 
-  async function selectProject(id) {
+  function resetProject(id) {
+    invalidateResources(...projectResources);
     state.projectId = id;
+    state.project = state.projects.find((item) => item.project.id === id)?.project || null;
     state.assets = null;
+    state.assetUrls = null;
     state.assetsQuery = "";
     state.assetsOffset = 0;
-    state.assetsRequest++;
     state.assetsLoading = false;
     state.candidates = null;
     state.candidatesQuery = "";
     state.candidatesOffset = 0;
-    state.candidatesRequest++;
     state.candidatesLoading = false;
     state.candidateDetail = null;
     state.assetDetail = null;
     state.candidateDetailRequest++;
     state.assetDetailRequest++;
-    for (const id of ["candidate-detail-dialog", "asset-detail-dialog"]) $("#" + id).close();
+    state.deleteAsset = null;
+    for (const id of ["candidate-detail-dialog", "asset-detail-dialog", "delete-asset-dialog", "cancel-scope-dialog"]) $("#" + id).close();
     state.assetFilters = { technology: "", provider: "", category: "" };
     state.candidateFilters = { source: "", dns_status: "", ip_match: "", scope_status: "", confidence: "", interest: "" };
     for (const input of $$("#assets-filter-technology, #assets-filter-provider, #assets-filter-category, #candidates-source, #candidates-dns, #candidates-ip-match, #candidates-scope, #candidates-confidence, #candidates-interest")) input.value = "";
@@ -357,34 +411,46 @@
     $("#candidates-search").value = "";
     selectedModules.clear();
     scanParams.clear();
-    state.targetCatalog = null;
     state.discoveryHttpEnrichment = false;
     targetSelections.clear();
     settingsTargetIds = new Set();
+    clearTargetPicker();
     for (const dialog of ["scan-module-dialog", "asset-target-dialog", "asset-readiness-dialog"]) $("#" + dialog).close();
-    rememberProject();
-    state.project = state.projects.find((item) => item.project.id === id)?.project || null;
     state.dashboard = null;
     state.scope = null;
+    state.scopeSaving = false;
     state.scopeHistory = [];
     state.rules = [];
-    state.jobs = [];
+    state.jobs = null;
+    state.jobErrorsOpen.clear();
+    clearJobCards();
+    recordsObserver.disconnect();
+    $("#dashboard-content").hidden = true;
+    for (const id of projectPanels) {
+      const node = document.getElementById(id);
+      panelData.delete(node);
+      node.replaceChildren();
+    }
     $("#scope-note").value = "";
     $("#scope-search").value = "";
+    $("#rule-value").value = "";
+    $("#rule-value").setCustomValidity("");
+    $("#rule-exclusion").checked = false;
+    $("#project-select").disabled = false;
     $("#scope-error").textContent = "";
     $("#scan-error").textContent = "";
+    $("#assets-error").textContent = "";
+    $("#candidates-error").textContent = "";
+    for (const render of projectRenderers) pendingRenders.add(render);
+  }
+
+  function selectProject(id) {
+    resetProject(id);
+    rememberProject();
     renderProjectCaption();
     notice("");
-    render();
-    if (!id) return;
-    try {
-      const requests = [loadScope(), loadJobs()];
-      if (["dashboard", "assets", "findings"].includes(state.view)) requests.push(loadDashboard());
-      await Promise.all(requests);
-      render();
-    } catch (error) {
-      notice(error.message, "error");
-    }
+    renderCurrent();
+    return refreshAndPoll();
   }
 
   function requireProject() {
@@ -394,89 +460,78 @@
   }
 
   function route() {
-    const hash = (location.hash || "#dashboard").replace("#", "");
+    if (!state.me) return;
+    const previous = currentSection();
+    const hash = location.hash.slice(1);
     const view = hash.startsWith("settings/") ? "settings" : hash.startsWith("assets/") ? "assets" : hash;
-    const allowed = ["dashboard", "scope", "scans", "assets", "findings", "reports", "users", "settings"];
-    state.view = allowed.includes(view) ? view : "dashboard";
-    if (["users", "settings"].includes(state.view) && state.me?.role !== "admin") state.view = "dashboard";
-    $$("[data-view]").forEach((node) => { node.hidden = node.dataset.view !== state.view; });
-    $$("[data-view-heading]").forEach((node) => { node.hidden = node.dataset.viewHeading !== state.view; });
-    $$("[data-view-link]").forEach((node) => {
-      node.classList.toggle("active", node.dataset.viewLink === state.view);
-      node.setAttribute("aria-current", node.dataset.viewLink === state.view ? "page" : "false");
-    });
-    if (state.view === "settings") {
-      const tab = hash.slice("settings/".length);
-      selectSettingsTab(tab);
-      if (tab === "api") loadSettingsProviders();
-      return;
+    state.view = views.some((node) => node.dataset.view === view) ? view : "dashboard";
+    if (["users", "settings"].includes(state.view) && state.me.role !== "admin") state.view = "dashboard";
+    for (const node of views) node.toggleAttribute("hidden", node.dataset.view !== state.view);
+    for (const node of viewHeadings) node.toggleAttribute("hidden", node.dataset.viewHeading !== state.view);
+    for (const node of viewLinks) {
+      const active = node.dataset.viewLink === state.view;
+      node.classList.toggle("active", active);
+      const current = active ? "page" : "false";
+      if (node.getAttribute("aria-current") !== current) node.setAttribute("aria-current", current);
     }
-    if (state.view === "assets") selectAssetsTab(hash.slice("assets/".length));
-    render();
-    if (state.view === "scans" && state.me) loadTaskTypes();
-    refreshCurrent();
+    if (state.view === "settings") state.settingsTab = selectTab(settingsTabs, "settingsTab", hash.slice("settings/".length));
+    if (state.view === "assets") state.assetsTab = selectTab(assetsTabs, "assetsTab", hash.slice("assets/".length));
+    if (previous !== currentSection()) notice("");
+    renderCurrent();
+    if (state.view === "scans") updateScanLaunch();
+    refreshAndPoll();
   }
 
+  const views = $$("[data-view]");
+  const viewHeadings = $$("[data-view-heading]");
+  const viewLinks = $$("[data-view-link]");
   const settingsTabs = $$("[data-settings-tab]");
   const assetsTabs = $$("[data-assets-tab]");
-  let settingsProviderRequest = 0;
   let editingProvider = null;
 
-  function selectSettingsTab(name) {
-    const selected = settingsTabs.find((tab) => tab.dataset.settingsTab === name) || settingsTabs[0];
-    const focusIsOnTab = settingsTabs.includes(document.activeElement);
-    for (const tab of settingsTabs) {
+  function selectTab(tabs, key, name) {
+    const selected = tabs.find((tab) => tab.dataset[key] === name) || tabs[0];
+    for (const tab of tabs) {
       const active = tab === selected;
-      tab.setAttribute("aria-selected", String(active));
-      tab.tabIndex = active ? 0 : -1;
-      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+      if (tab.getAttribute("aria-selected") !== String(active)) tab.setAttribute("aria-selected", String(active));
+      if (tab.tabIndex !== (active ? 0 : -1)) tab.tabIndex = active ? 0 : -1;
+      document.getElementById(tab.getAttribute("aria-controls")).toggleAttribute("hidden", !active);
     }
-    if (focusIsOnTab) selected.focus();
+    if (tabs.includes(document.activeElement) && document.activeElement !== selected) selected.focus({ preventScroll: true });
+    return selected.dataset[key];
   }
 
-  function selectAssetsTab(name) {
-    const selected = assetsTabs.find((tab) => tab.dataset.assetsTab === name) || assetsTabs[0];
-    const focusIsOnTab = assetsTabs.includes(document.activeElement);
-    for (const tab of assetsTabs) {
-      const active = tab === selected;
-      tab.setAttribute("aria-selected", String(active));
-      tab.tabIndex = active ? 0 : -1;
-      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
-    }
-    if (focusIsOnTab) selected.focus();
+  function loadSettingsProviders(force = false) {
+    return loadResource("providers", "/api/settings/providers", (data) => {
+      if (sameContent(state.settingsProviders, data.providers)) return;
+      state.settingsProviders = data.providers;
+      markForRender(renderSettingsProviders);
+    }, { force });
   }
 
-  async function loadSettingsProviders() {
+  function renderSettingsProviders() {
     const node = $("#settings-providers");
-    const request = ++settingsProviderRequest;
-    node.replaceChildren(el("p", "Loading provider status…", "muted"));
-    try {
-      const data = await api("/api/settings/providers");
-      if (request !== settingsProviderRequest) return;
-      node.replaceChildren(table(["Provider", "Used by", "Key", "Actions"], data.providers, (provider, column) => {
-        if (column === "Provider") return provider.name;
-        if (column === "Used by") return provider.applications.join(" · ");
-        if (column === "Key") {
-          if (provider.last_four) return el("code", `••••${provider.last_four}`);
-          return el("span", provider.configured ? "Server configuration" : "Not configured", "muted");
-        }
-        const button = el("button", provider.configured ? "Replace key" : "Add key");
-        button.type = "button";
-        button.setAttribute("aria-label", `${button.textContent} for ${provider.name}`);
-        button.addEventListener("click", () => openProviderKeyDialog(provider));
-        return button;
-      }));
-    } catch (error) {
-      if (request === settingsProviderRequest) node.replaceChildren(el("p", error.message, "error"));
-    }
-  }
-
-  function renderSettingsWordlists(error) {
-    const node = $("#settings-wordlists");
-    if (error) {
-      node.replaceChildren(el("p", "Could not load word lists. Use Refresh to try again.", "error"));
+    if (!state.settingsProviders) {
+      node.replaceChildren(el("p", "Loading provider status…", "muted"));
       return;
     }
+    node.replaceChildren(table(["Provider", "Used by", "Key", "Actions"], state.settingsProviders, (provider, column) => {
+      if (column === "Provider") return provider.name;
+      if (column === "Used by") return provider.applications.join(" · ");
+      if (column === "Key") {
+        if (provider.last_four) return el("code", `••••${provider.last_four}`);
+        return el("span", provider.configured ? "Server configuration" : "Not configured", "muted");
+      }
+      const button = el("button", provider.configured ? "Replace key" : "Add key");
+      button.type = "button";
+      button.setAttribute("aria-label", `${button.textContent} for ${provider.name}`);
+      button.addEventListener("click", () => openProviderKeyDialog(provider));
+      return button;
+    }));
+  }
+
+  function renderSettingsWordlists() {
+    const node = $("#settings-wordlists");
     node.replaceChildren(table(["Name", "Source", "Entries"], state.dnsWordlists, (list, column) => {
       if (column === "Name") return list.name;
       if (column === "Source") return list.id === "default" ? "Built-in" : "Uploaded";
@@ -484,59 +539,148 @@
     }));
   }
 
-  function render() {
-    renderScope();
-    renderJobs();
-    renderScanModules();
-    renderDashboard();
-    renderFindings();
-    renderAssets();
-    renderCandidates();
-    renderProviderCatalog();
-    if (state.view === "users") renderUsers();
+  const projectRenderers = [
+    renderDashboard, renderScope, renderScopeHistory, renderScanModules, renderJobs, renderAssets,
+    renderCandidates, renderAssetUrls, renderFindings,
+  ];
+  const projectPanels = [
+    "dashboard-empty", "dashboard-metrics", "dashboard-asset-chart", "dashboard-jobs", "dashboard-availability",
+    "dashboard-worker", "dashboard-http", "dashboard-ports", "dashboard-coverage",
+    "scope-rules", "scope-history", "jobs-list", "asset-detail-content", "candidate-detail-content",
+    "assets-inventory", "candidates-inventory", "assets-urls", "findings-summary", "findings-table",
+  ];
+  const sectionRenderers = {
+    dashboard: [renderDashboard],
+    scope: [renderScope, renderScopeHistory],
+    scans: [renderScanModules, renderJobs],
+    "assets/hosts": [renderAssets],
+    "assets/candidates": [renderCandidates, renderProviderCatalog],
+    "assets/urls": [renderAssetUrls],
+    findings: [renderFindings],
+    users: [renderUsers, renderAudit],
+    "settings/api": [renderSettingsProviders],
+    "settings/wordlist": [renderSettingsWordlists],
+  };
+  const pendingRenders = new Set(Object.values(sectionRenderers).flat());
+
+  function currentSection() {
+    if (state.view === "assets") return `assets/${state.assetsTab}`;
+    if (state.view === "settings") return `settings/${state.settingsTab}`;
+    return state.view;
   }
 
-  async function refreshCurrent() {
-    if (state.view === "settings") {
-      if (state.me?.role === "admin") {
-        if ($("#settings-tab-api").getAttribute("aria-selected") === "true") await loadSettingsProviders();
-        else await loadTaskTypes();
-      }
-      return;
+  function markForRender(...renderers) {
+    for (const render of renderers) pendingRenders.add(render);
+    renderCurrent();
+  }
+
+  function renderCurrent() {
+    if (!state.me || $("#app-view").hidden) return;
+    for (const render of sectionRenderers[currentSection()] || []) {
+      if (pendingRenders.delete(render)) render();
     }
-    if (!state.projectId) return;
+  }
+
+  const sectionLoaders = {
+    dashboard: [loadDashboard],
+    scope: [loadScope],
+    scans: [loadTaskTypes, loadJobs, loadScope],
+    "assets/hosts": [loadAssets],
+    "assets/candidates": [loadCandidates, loadTaskTypes],
+    "assets/urls": [loadAssetUrls],
+    findings: [loadDashboard],
+    users: [loadAdmin],
+    "settings/api": [loadSettingsProviders],
+    "settings/wordlist": [loadTaskTypes],
+  };
+
+  async function refreshCurrent(force = false, loaders = sectionLoaders[currentSection()] || []) {
+    const section = currentSection();
+    const user = state.me;
+    const projectId = state.projectId;
+    if (!user) return;
+    if (!projectId && !["users", "settings"].includes(state.view)) return;
     try {
-      if (["dashboard", "assets", "findings"].includes(state.view)) await loadDashboard();
-      if (state.view === "assets") await loadCandidates();
-      if (state.view === "scans") await Promise.all([loadJobs(), loadScope()]);
-      if (state.view === "scope") await loadScope();
-      if (state.view === "users") await loadAdmin();
+      await Promise.all(loaders.map((load) => load(force)));
     } catch (error) {
-      notice(error.message, "error");
+      if (user === state.me && projectId === state.projectId && section === currentSection()) notice(error.message, "error");
     }
   }
 
-  async function loadDashboard(refreshAssets = true) {
-    if (!requireProject()) return;
-    const projectId = state.projectId;
-    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/dashboard`);
-    if (projectId !== state.projectId) return;
-    state.dashboard = value;
-    renderDashboard();
-    renderAssets();
-    renderFindings();
-    if (refreshAssets && state.view === "assets") await loadAssets();
+  let pollTimer;
+  let pollVersion = 0;
+
+  function stopPolling() {
+    clearTimeout(pollTimer);
+    return ++pollVersion;
   }
 
-  async function loadScope() {
-    if (!requireProject() || scopeHasChanges() || state.scopeSaving) return;
-    const projectId = state.projectId;
-    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/scope`);
-    if (state.projectId !== projectId || scopeHasChanges() || state.scopeSaving) return;
-    if (state.scope && value.scope.version < state.scope.version) return;
-    applyScope(value.scope);
-    state.scopeHistory = value.history || [];
-    renderScope();
+  async function refreshAndPoll(force = false) {
+    const version = stopPolling();
+    await refreshCurrent(force);
+    schedulePoll(version);
+  }
+
+  function schedulePoll(version) {
+    if (version !== pollVersion || document.hidden || !state.me || !state.projectId) return;
+    if (state.view !== "dashboard" && state.view !== "scans") return;
+    const dashboard = state.view === "dashboard";
+    const jobs = dashboard ? state.dashboard?.jobs : state.jobs;
+    const active = jobs?.some((job) => job.status === "queued" || job.status === "running");
+    const loaders = dashboard ? [() => loadDashboard(true)] : [() => loadJobs(true), loadScope];
+    pollTimer = setTimeout(async () => {
+      await refreshCurrent(false, loaders);
+      schedulePoll(version);
+    }, active ? 5000 : dataMaxAge);
+  }
+
+  function invalidateJobResults() {
+    invalidateResources("jobs", "dashboard", "assets", "asset-urls", "candidates");
+  }
+
+  function loadDashboard(force = false) {
+    if (!state.projectId) return;
+    return loadResource("dashboard", `/api/projects/${encodeURIComponent(state.projectId)}/dashboard`, (value) => {
+      const previous = state.dashboard;
+      state.dashboard = {
+        dataStatus: value.data_status,
+        metrics: value.metrics || {},
+        severityCounts: value.severity_counts,
+        findings: (value.findings || []).map(({ severity, rule_id, asset, title, last_seen }) => ({
+          severity, rule_id, asset, title, last_seen,
+        })),
+        jobs: (value.jobs || []).map(({ id, task_type, status, result, finished_at, created_at }) => ({
+          id, task_type, status, result: { engine: result?.engine, partial: result?.partial }, finished_at, created_at,
+        })),
+        worker: value.worker,
+        availability: value.availability,
+        http: (value.recent_http || []).map(({ url, source, observed_at, data }) => ({ url, source, observed_at, code: data?.status_code })),
+        ports: (value.recent_ports || []).map(({ ip, data }) => ({ ip, port: data?.port, status: data?.state, service: data?.service })),
+        coverage: value.web_check_coverage || [],
+      };
+      markForRender(renderDashboard);
+      if (!sameContent(previous?.severityCounts, state.dashboard.severityCounts) || !sameContent(previous?.findings, state.dashboard.findings)) {
+        markForRender(renderFindings);
+      }
+    }, { force });
+  }
+
+  function loadScope(force = false) {
+    if (!state.projectId || scopeHasChanges() || state.scopeSaving) return;
+    return loadResource("scope", `/api/projects/${encodeURIComponent(state.projectId)}/scope`, (value) => {
+      if (scopeHasChanges() || state.scopeSaving || (state.scope && value.scope.version < state.scope.version)) return;
+      if (!sameContent(state.scope, value.scope)) {
+        if (state.scope) invalidateCandidates();
+        applyScope(value.scope);
+        markForRender(renderScope);
+        if (state.view === "scans") updateScanLaunch();
+      }
+      const history = value.history || [];
+      if (!sameContent(state.scopeHistory, history)) {
+        state.scopeHistory = history;
+        markForRender(renderScopeHistory);
+      }
+    }, { force });
   }
 
   function applyScope(scope) {
@@ -544,12 +688,23 @@
     state.rules = (scope.rules || []).map((rule) => ({ ...rule }));
   }
 
+  function invalidateCandidates() {
+    invalidateResources("candidates");
+    if (currentSection() === "assets/candidates") loadCandidates();
+  }
+
   function scopeChanges() {
     const saved = state.scope?.rules || [];
+    const savedKeys = new Set(saved.map(ruleKey));
+    const draftKeys = new Set(state.rules.map(ruleKey));
     return {
-      added: state.rules.filter((rule) => !saved.some((item) => sameRule(item, rule))).length,
-      removed: saved.filter((rule) => !state.rules.some((item) => sameRule(item, rule))).length,
+      added: state.rules.filter((rule) => !savedKeys.has(ruleKey(rule))).length,
+      removed: saved.filter((rule) => !draftKeys.has(ruleKey(rule))).length,
     };
+  }
+
+  function ruleKey(rule) {
+    return JSON.stringify([rule.kind, rule.value, Boolean(rule.exclusion)]);
   }
 
   function sameRule(left, right) {
@@ -571,13 +726,15 @@
     wrapper.style.maxHeight = `${headerHeight + rows.reduce((height, row) => height + row.getBoundingClientRect().height, 0) + 2}px`;
   });
 
-  async function loadJobs() {
-    if (!requireProject()) return;
-    const projectId = state.projectId;
-    const value = await api(`/api/projects/${encodeURIComponent(projectId)}/jobs?limit=100`);
-    if (state.projectId !== projectId) return;
-    state.jobs = value.items || [];
-    renderJobs();
+  function loadJobs(force = false) {
+    if (!state.projectId) return;
+    const projectId = encodeURIComponent(state.projectId);
+    return loadResource("jobs", `/api/projects/${projectId}/jobs?limit=100`, (value) => {
+      const jobs = (value.items || []).map(jobHistoryItem);
+      if (sameContent(state.jobs, jobs)) return;
+      state.jobs = jobs;
+      markForRender(renderJobs);
+    }, { force });
   }
 
   function renderScope() {
@@ -595,6 +752,7 @@
     } else if (!filtered.length) {
       rules.appendChild(el("p", query ? "No matching records." : "No records. Add an allowed record to get started.", "empty"));
     } else {
+      const savedKeys = new Set(state.scope.rules.map(ruleKey));
       rules.appendChild(table(["Type", "Value", "Effect", ""], filtered, (rule, column) => {
         if (column === "Type") return scopeTypes[rule.kind];
         if (column === "Value") return rule.value;
@@ -609,7 +767,7 @@
           renderScope();
         });
         return button;
-      }, (rule) => (state.scope.rules || []).some((saved) => sameRule(saved, rule)) ? "" : "record-pending"));
+      }, (rule) => savedKeys.has(ruleKey(rule)) ? "" : "record-pending"));
     }
     const recordTable = rules.querySelector("table");
     if (recordTable) {
@@ -617,8 +775,9 @@
       recordsObserver.observe(recordTable);
     }
     updateScopeControls();
-    updateScanLaunch();
+  }
 
+  function renderScopeHistory() {
     const history = $("#scope-history");
     clear(history);
     if (!state.projectId) {
@@ -640,93 +799,136 @@
     }
   }
 
+  function jobHistoryItem(job) {
+    const { id, task_type, status, finished_at, counters, error, archived, chain, chain_order, artifacts } = job;
+    const { engine, partial, checked, found, unprocessed, rate_limit, checkpointed, errors, candidates } = job.result || {};
+    const httpErrors = [];
+    if (error || errors?.length) {
+      for (const candidate of Array.isArray(candidates) ? candidates : []) {
+        if (candidate?.http_enriched !== false) continue;
+        for (const attempt of Array.isArray(candidate.http_errors) ? candidate.http_errors : []) {
+          if (attempt?.url && attempt?.reason) httpErrors.push(`${attempt.url}: ${attempt.reason}`);
+        }
+      }
+    }
+    return {
+      id, task_type, status, finished_at, counters, error, archived, chain_order,
+      chain: chain && { name: chain.name, status: chain.status },
+      artifacts: artifacts?.map(({ kind, size, href }) => ({ kind, size, href })),
+      result: { engine, partial, checked, foundCount: found?.length, unprocessed, rate_limit, checkpointed, errors },
+      httpErrors,
+    };
+  }
+
+  const jobCards = new Map();
+  const jobList = el("div", null, "job-list");
+
+  function clearJobCards() {
+    jobCards.clear();
+    jobList.replaceChildren();
+  }
+
   function renderJobs() {
     const node = $("#jobs-list");
-    clear(node);
-    if (!state.projectId) {
-      node.appendChild(el("p", "Select a project to view jobs.", "empty"));
+    if (!state.jobs?.length) {
+      clearJobCards();
+      const message = !state.projectId ? "Select a project to view jobs."
+        : state.jobs ? "No jobs yet. Submit one above." : "Loading jobs…";
+      node.replaceChildren(el("p", message, "empty"));
       return;
     }
-    if (!state.jobs.length) {
-      node.appendChild(el("p", "No jobs yet. Submit one above.", "empty"));
-      return;
+    const ids = new Set(state.jobs.map((job) => job.id));
+    for (const [id, entry] of jobCards) {
+      if (ids.has(id)) continue;
+      entry.card.remove();
+      jobCards.delete(id);
+      state.jobErrorsOpen.delete(id);
     }
-    const list = el("div", null, "job-list");
-    for (const job of state.jobs) {
-      const card = el("article", null, "job-card");
-      const head = el("div", null, "job-head");
-      const module = scanModules.find((item) => item.tasks.includes(job.task_type));
-      const heading = el("div");
-      if (module) heading.appendChild(el("p", module.title, "muted"));
-      heading.appendChild(el("strong", job.task_type));
-      const status = jobStatusBadge(job.status, job.result);
-      append(head, heading, status);
-      card.appendChild(head);
-      if (job.finished_at) {
-        card.appendChild(append(el("p", "Finished ", "muted"), displayTime(job.finished_at)));
+    state.jobs.forEach((job, index) => {
+      let entry = jobCards.get(job.id);
+      if (!entry || !sameContent(entry.job, job)) {
+        const card = createJobCard(job);
+        entry?.card.replaceWith(card);
+        entry = { job, card };
+        jobCards.set(job.id, entry);
       }
-      const counters = job.counters || {};
-      const details = el("dl", null, "job-counters");
-      for (const [label, count] of [["Targets", counters.targets], ["Processed", counters.processed], ["Skipped", counters.skipped], ["Errors", counters.errors]]) {
-        const counter = el("div", null, label === "Errors" && count > 0 ? "job-counter-errors" : "");
-        details.appendChild(append(counter, el("dt", label), el("dd", countLabel.format(count || 0))));
-      }
-      card.appendChild(details);
-      if (job.task_type === "dns.wordlist" && job.status === "queued") card.appendChild(el("p", "Wordlist waits for other checks to finish and for the single wordlist slot.", "muted"));
-      if (job.result?.engine === "dnsx") {
-        card.appendChild(el("p", `Checked ${countLabel.format(job.result.checked || 0)} · Found ${countLabel.format(job.result.found?.length || 0)} · Remaining ${countLabel.format(job.result.unprocessed || 0)} · DNS limit ${job.result.rate_limit}/s`, "muted"));
-      }
-      if (job.error || (Array.isArray(job.result?.errors) && job.result.errors.length)) {
-        const diagnostics = el("details", null, "job-error-details");
-        diagnostics.open = state.jobErrorsOpen.has(job.id);
-        diagnostics.appendChild(el("summary", job.status === "failed" ? "Failure details" : "Error details"));
-        const messages = Array.isArray(job.result?.errors) && job.result.errors.length ? job.result.errors : [job.error];
-        for (const message of messages) diagnostics.appendChild(el("p", message, "job-error-message"));
-        for (const candidate of Array.isArray(job.result?.candidates) ? job.result.candidates : []) {
-          if (!candidate || candidate.http_enriched !== false) continue;
-          for (const attempt of Array.isArray(candidate.http_errors) ? candidate.http_errors : []) {
-            if (attempt?.url && attempt?.reason) diagnostics.appendChild(el("p", `${attempt.url}: ${attempt.reason}`, "job-error-message"));
+      if (jobList.children[index] !== entry.card) jobList.insertBefore(entry.card, jobList.children[index] || null);
+    });
+    if (jobList.parentElement !== node) node.replaceChildren(jobList);
+  }
+
+  function createJobCard(job) {
+    const card = el("article", null, "job-card");
+    const head = el("div", null, "job-head");
+    const module = scanModules.find((item) => item.tasks.includes(job.task_type));
+    const heading = el("div");
+    if (module) heading.appendChild(el("p", module.title, "muted"));
+    heading.appendChild(el("strong", job.task_type));
+    const status = jobStatusBadge(job.status, job.result);
+    append(head, heading, status);
+    card.appendChild(head);
+    if (job.finished_at) {
+      card.appendChild(append(el("p", "Finished ", "muted"), displayTime(job.finished_at)));
+    }
+    const counters = job.counters || {};
+    const details = el("dl", null, "job-counters");
+    for (const [label, count] of [["Targets", counters.targets], ["Processed", counters.processed], ["Skipped", counters.skipped], ["Errors", counters.errors]]) {
+      const counter = el("div", null, label === "Errors" && count > 0 ? "job-counter-errors" : "");
+      details.appendChild(append(counter, el("dt", label), el("dd", countLabel.format(count || 0))));
+    }
+    card.appendChild(details);
+    if (job.task_type === "dns.wordlist" && job.status === "queued") card.appendChild(el("p", "Wordlist waits for other checks to finish and for the single wordlist slot.", "muted"));
+    if (job.result?.engine === "dnsx") {
+      card.appendChild(el("p", `Checked ${countLabel.format(job.result.checked || 0)} · Found ${countLabel.format(job.result.foundCount || 0)} · Remaining ${countLabel.format(job.result.unprocessed || 0)} · DNS limit ${job.result.rate_limit}/s`, "muted"));
+    }
+    if (job.error || (Array.isArray(job.result?.errors) && job.result.errors.length)) {
+      const diagnostics = el("details", null, "job-error-details");
+      diagnostics.open = state.jobErrorsOpen.has(job.id);
+      diagnostics.appendChild(el("summary", job.status === "failed" ? "Failure details" : "Error details"));
+      const messages = Array.isArray(job.result?.errors) && job.result.errors.length ? job.result.errors : [job.error];
+      for (const message of messages) diagnostics.appendChild(el("p", message, "job-error-message"));
+      for (const message of job.httpErrors) diagnostics.appendChild(el("p", message, "job-error-message"));
+      diagnostics.addEventListener("toggle", () => {
+        if (!diagnostics.isConnected) return;
+        if (diagnostics.open) state.jobErrorsOpen.add(job.id);
+        else state.jobErrorsOpen.delete(job.id);
+      });
+      card.appendChild(diagnostics);
+    }
+    if (job.archived) card.appendChild(el("p", "Archived imported record; it is never executed.", "muted"));
+    if (job.chain) card.appendChild(el("p", `Chain ${job.chain.name}: ${jobStatusLabel(job.chain.status)} · stage ${job.chain_order}`, "muted"));
+    const actions = el("div", null, "button-row");
+    if (job.status === "queued" || job.status === "running") {
+      const cancel = el("button", "Cancel", "link");
+      cancel.type = "button";
+      cancel.addEventListener("click", async () => {
+        const projectId = state.projectId;
+        try {
+          await api(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: {} });
+          if (projectId === state.projectId) {
+            invalidateJobResults();
+            await refreshAndPoll();
           }
-        }
-        diagnostics.addEventListener("toggle", () => {
-          if (!diagnostics.isConnected) return;
-          if (diagnostics.open) state.jobErrorsOpen.add(job.id);
-          else state.jobErrorsOpen.delete(job.id);
-        });
-        card.appendChild(diagnostics);
-      }
-      if (job.archived) card.appendChild(el("p", "Archived imported record; it is never executed.", "muted"));
-      if (job.chain) card.appendChild(el("p", `Chain ${job.chain.name}: ${jobStatusLabel(job.chain.status)} · stage ${job.chain_order}`, "muted"));
-      const actions = el("div", null, "button-row");
-      if (job.status === "queued" || job.status === "running") {
-        const cancel = el("button", "Cancel", "link");
-        cancel.type = "button";
-        cancel.addEventListener("click", async () => {
-          try {
-            await api(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: {} });
-            await loadJobs();
-          } catch (error) { notice(error.message, "error"); }
-        });
-        actions.appendChild(cancel);
-      }
-      if (job.result?.engine === "dnsx" && job.result.checkpointed && !job.artifacts?.length) {
-        const saved = el("a", "Download saved result", "link");
-        saved.href = `/api/jobs/${encodeURIComponent(job.id)}/result`;
-        actions.appendChild(saved);
-      }
-      if (job.artifacts?.length) {
-        for (const artifact of job.artifacts) {
-          const link = el("a", `${artifact.kind} (${artifact.size} B)`, "link");
-          link.href = artifact.href;
-          link.target = "_blank";
-          link.rel = "noopener";
-          actions.appendChild(link);
-        }
-      }
-      if (actions.childElementCount) card.appendChild(actions);
-      list.appendChild(card);
+        } catch (error) { notice(error.message, "error"); }
+      });
+      actions.appendChild(cancel);
     }
-    node.appendChild(list);
+    if (job.result?.engine === "dnsx" && job.result.checkpointed && !job.artifacts?.length) {
+      const saved = el("a", "Download saved result", "link");
+      saved.href = `/api/jobs/${encodeURIComponent(job.id)}/result`;
+      actions.appendChild(saved);
+    }
+    if (job.artifacts?.length) {
+      for (const artifact of job.artifacts) {
+        const link = el("a", `${artifact.kind} (${artifact.size} B)`, "link");
+        link.href = artifact.href;
+        link.target = "_blank";
+        link.rel = "noopener";
+        actions.appendChild(link);
+      }
+    }
+    if (actions.childElementCount) card.appendChild(actions);
+    return card;
   }
 
   function statusClass(status) {
@@ -779,7 +981,7 @@
       bar.appendChild(el("span", countLabel.format(value), "asset-value"));
       append(columns, append(column, bar, el("span", label, "asset-label")));
     });
-    $("#dashboard-asset-chart").replaceChildren(append(chart, axis, columns));
+    return append(chart, axis, columns);
   }
 
   function renderDashboard() {
@@ -797,109 +999,113 @@
       content.hidden = true;
       return;
     }
-    empty.hidden = state.dashboard.data_status !== "empty";
-    if (state.dashboard.data_status === "empty") {
-      empty.replaceChildren(el("h2", "No observations yet"), el("p", "Approve the project scope and run a scan to see results here."));
+    const dashboard = state.dashboard;
+    empty.hidden = dashboard.dataStatus !== "empty";
+    if (dashboard.dataStatus === "empty") {
+      renderPanel("dashboard-empty", [state.projectId, dashboard.dataStatus], () => [
+        el("h2", "No observations yet"), el("p", "Approve the project scope and run a scan to see results here."),
+      ]);
       content.hidden = true;
       return;
     }
     content.hidden = false;
-    const metrics = $("#dashboard-metrics");
-    const data = state.dashboard.metrics;
-    metrics.replaceChildren(...dashboardMetrics.map(([label, key]) => renderMetric(label, data[key] ?? 0, key)));
-    renderAssetChart(data);
-    if (state.dashboard.data_status === "partial") {
-      metrics.appendChild(el("p", "Some checks did not return data. Review error details in Job history.", "warn-text"));
-    }
+    const metrics = dashboard.metrics;
+    renderPanel("dashboard-metrics", [dashboard.dataStatus, ...dashboardMetrics.map(([, key]) => metrics[key])], () => {
+      const children = dashboardMetrics.map(([label, key]) => renderMetric(label, metrics[key] ?? 0, key));
+      if (dashboard.dataStatus === "partial") children.push(el("p", "Some checks did not return data. Review error details in Job history.", "warn-text"));
+      return children;
+    });
+    renderPanel("dashboard-asset-chart", assetMetrics.map(([, key]) => metrics[key]), () => [renderAssetChart(metrics)]);
 
-    const jobsNode = $("#dashboard-jobs");
-    clear(jobsNode);
-    jobsNode.appendChild(table(["Task", "Status", "Finished"], state.dashboard.jobs || [], (job, column) => {
+    renderPanel("dashboard-jobs", dashboard.jobs, () => [table(["Task", "Status", "Finished"], dashboard.jobs, (job, column) => {
       if (column === "Task") return job.task_type;
       if (column === "Status") return jobStatusBadge(job.status, job.result);
       return job.finished_at || job.created_at;
-    }));
+    })]);
 
-    const availability = $("#dashboard-availability");
-    clear(availability);
-    const worker = state.dashboard.worker || { state: "unknown" };
-    $("#dashboard-worker").replaceChildren(
+    const worker = dashboard.worker || { state: "unknown" };
+    renderPanel("dashboard-worker", worker.state, () => [
       el("span", `Worker: ${worker.state}`, worker.state === "ready" ? "badge ok" : "badge warn"),
-    );
-    if (worker.last_heartbeat) {
-      availability.appendChild(el("p", `Last heartbeat ${worker.last_heartbeat}`, "worker-heartbeat muted"));
-    }
-    const unavailable = state.dashboard.availability?.unavailable || [];
-    const errors = state.dashboard.availability?.recent_source_errors || {};
-    if (!unavailable.length && !Object.keys(errors).length) {
-      availability.appendChild(el("p", "All configured task types and sources are available.", "muted"));
-    } else {
-      const items = unavailable.map((item) => ({ "Source": item.task_type, "Reason": item.reason }));
-      for (const [task, reason] of Object.entries(errors)) items.push({ "Source": task, "Reason": reason });
-      availability.appendChild(table(["Source", "Reason"], items));
-    }
+    ]);
+    const unavailable = dashboard.availability?.unavailable || [];
+    const errors = dashboard.availability?.recent_source_errors || {};
+    renderPanel("dashboard-availability", [worker.last_heartbeat, unavailable, errors], () => {
+      const children = [];
+      if (worker.last_heartbeat) children.push(el("p", `Last heartbeat ${worker.last_heartbeat}`, "worker-heartbeat muted"));
+      if (!unavailable.length && !Object.keys(errors).length) {
+        children.push(el("p", "All configured task types and sources are available.", "muted"));
+      } else {
+        const items = unavailable.map((item) => ({ "Source": item.task_type, "Reason": item.reason }));
+        for (const [task, reason] of Object.entries(errors)) items.push({ "Source": task, "Reason": reason });
+        children.push(table(["Source", "Reason"], items));
+      }
+      return children;
+    });
 
-    const http = $("#dashboard-http");
-    clear(http);
-    http.appendChild(table(["URL", "HTTP status", "Source", "Observed"], state.dashboard.recent_http || [], (row, column) => {
+    renderPanel("dashboard-http", dashboard.http, () => [table(["URL", "HTTP status", "Source", "Observed"], dashboard.http, (row, column) => {
       if (column === "HTTP status") {
-        const code = row.data?.status_code;
+        const code = row.code;
         return code ? el("span", code, `badge ${code >= 500 ? "bad" : code >= 400 ? "warn" : "ok"}`) : "";
       }
       if (column === "Source") return row.source;
       if (column === "Observed") return row.observed_at;
       return row.url;
-    }));
+    })]);
 
-    const ports = $("#dashboard-ports");
-    clear(ports);
-    ports.appendChild(table(["IP", "Port", "State", "Service"], state.dashboard.recent_ports || [], (row, column) => {
+    renderPanel("dashboard-ports", dashboard.ports, () => [table(["IP", "Port", "State", "Service"], dashboard.ports, (row, column) => {
       if (column === "IP") return row.ip;
-      if (column === "Port") return row.data?.port ?? "";
+      if (column === "Port") return row.port ?? "";
       if (column === "State") {
-        const status = row.data?.state;
+        const status = row.status;
         return status ? el("span", status, `badge ${status === "open" ? "ok" : status === "timeout" ? "warn" : ""}`) : "";
       }
-      return row.data?.service || "";
-    }));
+      return row.service || "";
+    })]);
 
-    const coverage = $("#dashboard-coverage");
-    clear(coverage);
-    coverage.appendChild(table(["Rule", "Version", "Severity", "Evaluated", "Findings", "Not applicable"], state.dashboard.web_check_coverage || [], (row, column) => {
+    renderPanel("dashboard-coverage", dashboard.coverage, () => [table(["Rule", "Version", "Severity", "Evaluated", "Findings", "Not applicable"], dashboard.coverage, (row, column) => {
       const map = {
         Rule: row.id, Version: row.version, Severity: row.severity,
         Evaluated: row.evaluated, Findings: row.findings, "Not applicable": row.not_applicable,
       };
       return map[column] ?? "";
-    }));
+    })]);
   }
 
-  async function loadAssets() {
+  const panelData = new WeakMap();
+
+  function renderPanel(id, data, children) {
+    const node = document.getElementById(id);
+    if (!sameContent(panelData.get(node), data)) node.replaceChildren(...children());
+    panelData.set(node, data);
+  }
+
+  function loadAssets(force = false) {
     if (!state.projectId) return;
-    const projectId = state.projectId;
-    const request = ++state.assetsRequest;
+    clearTimeout(assetsSearchTimer);
     const params = new URLSearchParams({ q: state.assetsQuery, offset: state.assetsOffset });
     if (state.assetFilters.technology) params.set("technology", state.assetFilters.technology);
     if (state.assetFilters.provider) params.set("provider", state.assetFilters.provider);
     if (state.assetFilters.category) params.set("category", state.assetFilters.category);
-    state.assetsLoading = true;
-    $("#assets-error").textContent = "";
-    renderAssets();
-    try {
-      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/assets?${params}`);
-      if (request !== state.assetsRequest || projectId !== state.projectId) return;
-      state.assets = value;
+    return loadResource("assets", `/api/projects/${encodeURIComponent(state.projectId)}/assets?${params}`, (value) => {
       state.assetsOffset = value.offset;
-    } catch (error) {
-      if (request !== state.assetsRequest || projectId !== state.projectId) return;
-      state.assets = null;
-      $("#assets-error").textContent = error.message;
-    } finally {
-      if (request === state.assetsRequest && projectId === state.projectId) {
-        state.assetsLoading = false;
-        renderAssets();
+      if (!sameContent(state.assets, value)) {
+        state.assets = value;
+        markForRender(renderAssets);
       }
-    }
+    }, {
+      force,
+      onStart() {
+        $("#assets-error").textContent = "";
+        state.assetsLoading = true;
+        updateAssetsStatus();
+      },
+      onError(error) { $("#assets-error").textContent = error.message; },
+      onFinish() {
+        state.assetsLoading = false;
+        if (!state.assets) markForRender(renderAssets);
+        updateAssetsStatus();
+      },
+    });
   }
 
   function renderAssets() {
@@ -908,7 +1114,7 @@
     const data = state.assets;
     $("#assets-search").disabled = !state.projectId;
     if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
-    else if (state.assetsLoading) node.appendChild(el("p", "Loading assets…", "empty"));
+    else if (!data) node.appendChild(el("p", $("#assets-error").textContent ? "No asset data available." : "Loading assets…", "empty"));
     else node.appendChild(table(["Hosts", "IP addresses", "Groups", "Confidence / interest", "Last seen", "Actions"], data?.items || [], (row, column) => {
       if (column === "Hosts") return row.host;
       if (column === "IP addresses") {
@@ -941,16 +1147,37 @@
       append(wrap, details, button);
       return wrap;
     }));
-    const total = data?.total || 0;
-    const disabled = !state.projectId || !data || state.assetsLoading;
-    $("#assets-previous").disabled = disabled || state.assetsOffset === 0;
-    $("#assets-next").disabled = disabled || state.assetsOffset + 10 >= total;
+    updateAssetsStatus();
+  }
+
+  function updateAssetsStatus() {
+    const total = state.assets?.total || 0;
+    const offset = state.assets?.offset || 0;
+    const disabled = !state.assets || state.assetsLoading || Boolean($("#assets-error").textContent);
+    $("#assets-inventory").setAttribute("aria-busy", String(state.assetsLoading));
+    $("#assets-previous").disabled = disabled || offset === 0;
+    $("#assets-next").disabled = disabled || offset + 10 >= total;
     $("#assets-page-status").textContent = state.assetsLoading ? "Loading…" : total
-      ? `${state.assetsOffset + 1}–${Math.min(state.assetsOffset + 10, total)} of ${total} · Page ${state.assetsOffset / 10 + 1} of ${Math.ceil(total / 10)}` : "0 records";
+      ? `${offset + 1}–${Math.min(offset + 10, total)} of ${total} · Page ${offset / 10 + 1} of ${Math.ceil(total / 10)}` : "0 records";
     for (const format of ["txt", "csv"]) $("#assets-export-" + format).disabled = disabled || total === 0;
+  }
+
+  function renderAssetUrls() {
     const urls = $("#assets-urls");
-    clear(urls);
-    urls.appendChild(table(["Value", "Last seen"], state.dashboard?.assets?.urls || [], (row, column) => column === "Value" ? row.value : row.last_seen));
+    if (state.projectId && !state.assetUrls) {
+      urls.replaceChildren(el("p", "Loading URLs…", "empty"));
+      return;
+    }
+    urls.replaceChildren(table(["Value", "Last seen"], state.assetUrls || [], (row, column) => column === "Value" ? row.value : row.last_seen));
+  }
+
+  function loadAssetUrls(force = false) {
+    if (!state.projectId) return;
+    return loadResource("asset-urls", `/api/projects/${encodeURIComponent(state.projectId)}/assets/urls`, (value) => {
+      if (sameContent(state.assetUrls, value.items)) return;
+      state.assetUrls = value.items;
+      markForRender(renderAssetUrls);
+    }, { force });
   }
 
   async function downloadAssets(format) {
@@ -995,14 +1222,20 @@
     } catch (error) { notice(error.message, "error"); }
   }
 
-  function addCandidateToScope() {
+  async function addCandidateToScope() {
     const host = $("#candidate-add-scope").dataset.host || "";
     if (!requireProject() || !host || state.scopeSaving || state.me?.role === "viewer") return;
     if ($("#candidate-detail-dialog").dataset.projectId !== state.projectId) {
       notice("The selected project changed. Reopen the candidate from the current project.", "error");
       return;
     }
-    if (!state.scope) { notice("Load the project Scope before adding a name.", "error"); return; }
+    const projectId = state.projectId;
+    const request = state.candidateDetailRequest;
+    if (!state.scope) {
+      try { await loadScope(); } catch (error) { notice(error.message, "error"); return; }
+    }
+    if (projectId !== state.projectId || request !== state.candidateDetailRequest
+      || !$("#candidate-detail-dialog").open || !state.scope || state.scopeSaving) return;
     if (state.rules.some((rule) => rule.kind === "exact_domain" && rule.value === host && !rule.exclusion)) {
       notice(`${host} is already in the Scope editor.`, "info");
       return;
@@ -1011,36 +1244,35 @@
     state.rules.push({ kind: "exact_domain", value: host, exclusion: false, verified: true });
     $("#candidate-detail-dialog").close();
     location.hash = "#scope";
-    updateScopeControls();
-    renderScope();
+    markForRender(renderScope);
     notice(`${host} was added to the Scope editor. Review and save the revision to approve it.`, "info");
   }
 
-  async function loadCandidates() {
+  function loadCandidates(force = false) {
     if (!state.projectId) return;
-    const projectId = state.projectId;
-    const request = ++state.candidatesRequest;
+    clearTimeout(candidatesSearchTimer);
     const params = new URLSearchParams({ q: state.candidatesQuery, offset: state.candidatesOffset, limit: 10 });
     for (const [key, value] of Object.entries(state.candidateFilters)) if (value) params.set(key, value);
-    state.candidatesLoading = true;
-    $("#candidates-error").textContent = "";
-    renderCandidates();
-    try {
-      const value = await api(`/api/projects/${encodeURIComponent(projectId)}/discovery/candidates?${params}`);
-      if (request !== state.candidatesRequest || projectId !== state.projectId) return;
-      state.candidates = value;
+    return loadResource("candidates", `/api/projects/${encodeURIComponent(state.projectId)}/discovery/candidates?${params}`, (value) => {
       state.candidatesOffset = value.offset;
-    } catch (error) {
-      if (request !== state.candidatesRequest || projectId !== state.projectId) return;
-      state.candidates = null;
-      $("#candidates-error").textContent = error.message;
-    } finally {
-      if (request === state.candidatesRequest && projectId === state.projectId) {
-        state.candidatesLoading = false;
-        renderCandidates();
-        renderProviderCatalog();
+      if (!sameContent(state.candidates, value)) {
+        state.candidates = value;
+        markForRender(renderCandidates);
       }
-    }
+    }, {
+      force,
+      onStart() {
+        $("#candidates-error").textContent = "";
+        state.candidatesLoading = true;
+        updateCandidatesStatus();
+      },
+      onError(error) { $("#candidates-error").textContent = error.message; },
+      onFinish() {
+        state.candidatesLoading = false;
+        if (!state.candidates) markForRender(renderCandidates);
+        updateCandidatesStatus();
+      },
+    });
   }
 
   function renderProviderCatalog() {
@@ -1062,7 +1294,7 @@
     clear(node);
     const data = state.candidates;
     if (!state.projectId) node.appendChild(el("p", "Select a project.", "empty"));
-    else if (state.candidatesLoading) node.appendChild(el("p", "Loading candidates…", "empty"));
+    else if (!data) node.appendChild(el("p", $("#candidates-error").textContent ? "No candidate data available." : "Loading candidates…", "empty"));
     else if (!data?.items?.length) {
       node.appendChild(el("p", "No candidates match these filters yet. Run Asset Discovery from Scans using this project's Assets.", "empty"));
     } else {
@@ -1082,13 +1314,19 @@
         return button;
       }));
     }
-    const total = data?.total || 0;
-    const disabled = !state.projectId || !data || state.candidatesLoading;
-    $("#candidates-previous").disabled = disabled || state.candidatesOffset === 0;
-    $("#candidates-next").disabled = disabled || state.candidatesOffset + 10 >= total;
+    updateCandidatesStatus();
+  }
+
+  function updateCandidatesStatus() {
+    const total = state.candidates?.total || 0;
+    const offset = state.candidates?.offset || 0;
+    const disabled = !state.candidates || state.candidatesLoading || Boolean($("#candidates-error").textContent);
+    $("#candidates-inventory").setAttribute("aria-busy", String(state.candidatesLoading));
+    $("#candidates-previous").disabled = disabled || offset === 0;
+    $("#candidates-next").disabled = disabled || offset + 10 >= total;
     $("#candidates-page-status").textContent = state.candidatesLoading ? "Loading…" : total
-      ? `${state.candidatesOffset + 1}–${Math.min(state.candidatesOffset + 10, total)} of ${total}` : "0 candidates";
-    for (const format of ["json", "csv"]) $("#candidates-export-" + format).disabled = !state.projectId || total === 0;
+      ? `${offset + 1}–${Math.min(offset + 10, total)} of ${total}` : "0 candidates";
+    for (const format of ["json", "csv"]) $("#candidates-export-" + format).disabled = disabled || total === 0;
   }
 
   async function openCandidateDetail(candidateId) {
@@ -1233,32 +1471,51 @@
 
   function renderFindings() {
     const summary = $("#findings-summary");
-    clear(summary);
-    const counts = state.dashboard?.severity_counts || {};
-    for (const severity of ["critical", "high", "medium", "low", "info", "unknown"]) {
-      summary.appendChild(renderMetric(severity, counts[severity] || 0, severity));
-    }
     const node = $("#findings-table");
-    clear(node);
-    if (!state.projectId) { node.appendChild(el("p", "Select a project.", "empty")); return; }
-    node.appendChild(table(["Severity", "Rule", "Asset", "Title", "Last seen"], state.dashboard?.findings || [], (row, column) => {
+    if (!state.dashboard) {
+      summary.replaceChildren();
+      node.replaceChildren(el("p", state.projectId ? "Loading findings…" : "Select a project.", "empty"));
+      return;
+    }
+    const counts = state.dashboard.severityCounts || {};
+    const severities = ["critical", "high", "medium", "low", "info", "unknown"];
+    summary.replaceChildren(...severities.map((severity) => renderMetric(severity, counts[severity] || 0, severity)));
+    node.replaceChildren(table(["Severity", "Rule", "Asset", "Title", "Last seen"], state.dashboard.findings, (row, column) => {
       const map = { Severity: row.severity, Rule: row.rule_id, Asset: row.asset, Title: row.title, "Last seen": row.last_seen };
       return map[column] ?? "";
     }));
   }
 
-  async function loadAdmin() {
+  function loadAdmin(force = false) {
     if (state.me?.role !== "admin") return;
-    const users = await api("/api/users?limit=200");
-    const audit = await api("/api/audit?limit=100");
-    renderUsers(users.items || [], audit.items || []);
+    return Promise.all([
+      loadResource("users", "/api/users?limit=200", (value) => {
+        const users = value.items || [];
+        if (sameContent(state.users, users)) return;
+        state.users = users;
+        markForRender(renderUsers);
+      }, { force }),
+      loadResource("audit", "/api/audit?limit=100", (value) => {
+        const audit = value.items || [];
+        if (sameContent(state.audit, audit)) return;
+        state.audit = audit;
+        markForRender(renderAudit);
+      }, { force }),
+    ]);
   }
 
-  function renderUsers(users = [], audit = []) {
+  function reloadAdmin() {
+    invalidateResources("users", "audit");
+    return loadAdmin();
+  }
+
+  function renderUsers() {
     const node = $("#users-list");
-    if (!node) return;
-    clear(node);
-    node.appendChild(table(["Username", "Role", "Active", "Created", "Actions"], users, (user, column) => {
+    if (!state.users) {
+      node.replaceChildren(el("p", "Loading users…", "muted"));
+      return;
+    }
+    node.replaceChildren(table(["Username", "Role", "Active", "Created", "Actions"], state.users, (user, column) => {
       if (column === "Role") return user.role;
       if (column === "Active") return user.is_active ? "yes" : "no";
       if (column === "Created") return user.created_at;
@@ -1269,7 +1526,7 @@
         toggle.addEventListener("click", async () => {
           try {
             await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { is_active: !user.is_active } });
-            await loadAdmin();
+            await reloadAdmin();
           } catch (error) { $("#user-error").textContent = error.message; }
         });
         const promote = el("button", user.role === "admin" ? "Make viewer" : "Make admin", "link");
@@ -1277,7 +1534,7 @@
         promote.addEventListener("click", async () => {
           try {
             await api(`/api/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { role: user.role === "admin" ? "viewer" : "admin" } });
-            await loadAdmin();
+            await reloadAdmin();
           } catch (error) { $("#user-error").textContent = error.message; }
         });
         append(wrap, toggle, promote);
@@ -1285,16 +1542,20 @@
       }
       return user[column.toLowerCase()] ?? "";
     }));
+  }
+
+  function renderAudit() {
     const auditNode = $("#audit-list");
-    if (auditNode) {
-      clear(auditNode);
-      auditNode.appendChild(table(["Time", "Actor", "Action", "Entity"], audit, (event, column) => {
-        if (column === "Time") return event.created_at;
-        if (column === "Actor") return event.actor;
-        if (column === "Action") return event.action;
-        return `${event.entity_type}${event.entity_id ? `: ${event.entity_id}` : ""}`;
-      }));
+    if (!state.audit) {
+      auditNode.replaceChildren(el("p", "Loading audit log…", "muted"));
+      return;
     }
+    auditNode.replaceChildren(table(["Time", "Actor", "Action", "Entity"], state.audit, (event, column) => {
+      if (column === "Time") return event.created_at;
+      if (column === "Actor") return event.actor;
+      if (column === "Action") return event.action;
+      return `${event.entity_type}${event.entity_id ? `: ${event.entity_id}` : ""}`;
+    }));
   }
 
   async function downloadReport(format) {
@@ -1362,8 +1623,7 @@
       $("#login-password").value = "";
       showApp();
       await loadProjects();
-      await loadTaskTypes();
-      location.hash = "#dashboard";
+      history.replaceState(history.state, "", "#dashboard");
       route();
     } catch (err) {
       error.textContent = err.message;
@@ -1399,7 +1659,7 @@
       default: return;
     }
     event.preventDefault();
-    assetsTabs[next].focus();
+    assetsTabs[next].focus({ preventScroll: true });
     assetsTabs[next].click();
   });
   for (const tab of settingsTabs) {
@@ -1421,7 +1681,7 @@
       default: return;
     }
     event.preventDefault();
-    settingsTabs[next].focus();
+    settingsTabs[next].focus({ preventScroll: true });
     settingsTabs[next].click();
   });
   function openProviderKeyDialog(provider) {
@@ -1460,7 +1720,8 @@
       });
       $("#provider-key-dialog").close();
       notice(`${provider.name} key saved.`, "success");
-      await loadSettingsProviders();
+      invalidateResources("providers", "task-types");
+      await refreshCurrent();
     } catch (err) {
       error.textContent = err.message;
     } finally {
@@ -1489,7 +1750,8 @@
       await api("/api/settings/wordlists", { method: "POST", body: { name, contents } });
       form.reset();
       notice(`Wordlist “${name}” uploaded.`, "success");
-      await loadTaskTypes();
+      invalidateResources("task-types");
+      await refreshCurrent();
     } catch (err) {
       error.textContent = err.message;
     } finally {
@@ -1506,15 +1768,6 @@
   $("#logout-button").addEventListener("click", async () => {
     menuButton.setAttribute("aria-expanded", "false");
     try { await api("/api/auth/logout", { method: "POST", body: {} }); } catch (_) {}
-    state.me = null;
-    state.projectId = "";
-    state.project = null;
-    state.dashboard = null;
-    state.scope = null;
-    state.scopeHistory = [];
-    state.rules = [];
-    state.jobs = [];
-    $("#scope-note").value = "";
     showLogin();
   });
 
@@ -1548,7 +1801,7 @@
     }
   });
 
-  $("#refresh-button").addEventListener("click", refreshCurrent);
+  $("#refresh-button").addEventListener("click", () => refreshAndPoll(true));
 
   function updateScopeControls() {
     const editable = Boolean(state.scope) && state.me?.role !== "viewer" && !state.scopeSaving;
@@ -1628,7 +1881,7 @@
     cancelDialog.showModal();
   });
   cancelDialog.addEventListener("close", () => {
-    if (cancelDialog.returnValue !== "discard") return;
+    if (!state.scope || cancelDialog.returnValue !== "discard") return;
     applyScope(state.scope);
     $("#scope-note").value = "";
     $("#rule-value").value = "";
@@ -1642,27 +1895,37 @@
   async function saveScope() {
     if (!state.scope || state.scopeSaving || !requireProject()) return;
     const projectId = state.projectId;
+    const user = state.me;
     const rules = state.rules.map(({ kind, value, exclusion, verified }) => ({ kind, value, exclusion, verified }));
     state.scopeSaving = true;
-    renderScope();
+    markForRender(renderScope);
     $("#scope-error").textContent = "";
     try {
       const value = await api(`/api/projects/${encodeURIComponent(projectId)}/scope`, {
         method: "PUT",
         body: { rules, expected_version: state.scope.version, note: $("#scope-note").value, approve: true },
       });
-      if (state.projectId !== projectId) return;
+      if (state.projectId !== projectId || state.me !== user) return;
       applyScope(value.scope);
+      markForRender(renderScope);
+      if (state.view === "scans") updateScanLaunch();
+      invalidateResources("scope");
+      invalidateCandidates();
       $("#scope-note").value = "";
       notice("The records have been successfully added.", "success");
       await loadProjects();
+      if (state.projectId !== projectId || state.me !== user) return;
       state.scopeSaving = false;
       await loadScope();
     } catch (error) {
-      $("#scope-error").textContent = error.message;
+      if (state.projectId === projectId && state.me === user) $("#scope-error").textContent = error.message;
     } finally {
-      state.scopeSaving = false;
-      renderScope();
+      if (state.projectId === projectId && state.me === user) {
+        state.scopeSaving = false;
+        markForRender(renderScope);
+        updateScopeControls();
+        if (state.view === "scans") updateScanLaunch();
+      }
     }
   }
 
@@ -1708,6 +1971,10 @@
   let settingsTargetIds = new Set();
   let targetPickerDraft = new Set();
   let targetPickerRows = [];
+  let targetPickerSearch = [];
+  let targetPickerMatches = [];
+  let targetPickerQuery = "";
+  let targetPickerTimer;
   let targetPickerOffset = 0;
   let settingsModule = null;
 
@@ -1835,10 +2102,10 @@
   }
 
   async function targetCatalog() {
+    const user = state.me;
     const projectId = state.projectId;
-    const data = await api(`/api/projects/${encodeURIComponent(projectId)}/assets/targets`);
-    if (state.projectId !== projectId) throw new Error("Project changed. Select targets in the current project.");
-    state.targetCatalog = data;
+    const data = await loadResource("target-catalog", `/api/projects/${encodeURIComponent(projectId)}/assets/targets`, null, { force: true });
+    if (!data || state.projectId !== projectId || state.me !== user) throw new Error("Project changed. Select targets in the current project.");
     return data;
   }
 
@@ -1865,9 +2132,9 @@
           await api(`/api/projects/${encodeURIComponent(projectId)}/assets/import-scope`, { method: "POST", body: { scope_version: data.scope_version } });
           if (state.projectId !== projectId) return;
           $("#asset-readiness-dialog").close();
-          await targetCatalog();
+          invalidateResources("assets", "dashboard");
           notice("IP addresses imported into Assets. Select hosts in module settings, then start scanning.", "success");
-          if (state.view === "assets") await loadDashboard();
+          await refreshAndPoll();
         } catch (error) { if (projectId === state.projectId) $("#asset-readiness-error").textContent = error.message; }
         finally { action.disabled = false; }
       } else {
@@ -1901,7 +2168,11 @@
         return;
       }
       targetPickerRows = data.items;
-      targetPickerDraft = new Set([...settingsTargetIds].filter((id) => targetPickerRows.some((row) => row.id === id && targetEligible(row, module))));
+      const eligibleIds = new Set(targetPickerRows.filter((row) => targetEligible(row, module)).map((row) => row.id));
+      targetPickerDraft = new Set([...settingsTargetIds].filter((id) => eligibleIds.has(id)));
+      targetPickerSearch = targetPickerRows.map((row) => [row.host || "", ...row.ips].join("\n").toLowerCase());
+      targetPickerMatches = targetPickerRows;
+      targetPickerQuery = "";
       targetPickerOffset = 0;
       $("#asset-target-search").value = "";
       $("#asset-target-title").textContent = `Select hosts · ${module.title}`;
@@ -1913,10 +2184,26 @@
 
   function filteredTargetRows() {
     const query = $("#asset-target-search").value.trim().toLowerCase();
-    return targetPickerRows.filter((row) => [row.host || "", ...row.ips].some((value) => value.toLowerCase().includes(query)));
+    if (query !== targetPickerQuery) {
+      targetPickerQuery = query;
+      targetPickerMatches = query ? targetPickerRows.filter((_, index) =>
+        targetPickerSearch[index].includes(query)) : targetPickerRows;
+    }
+    return targetPickerMatches;
+  }
+
+  function clearTargetPicker() {
+    clearTimeout(targetPickerTimer);
+    targetPickerDraft.clear();
+    targetPickerRows = [];
+    targetPickerSearch = [];
+    targetPickerMatches = [];
+    targetPickerQuery = "";
+    $("#asset-target-rows").replaceChildren();
   }
 
   function renderTargetPicker() {
+    clearTimeout(targetPickerTimer);
     const rows = filteredTargetRows();
     targetPickerOffset = Math.min(targetPickerOffset, Math.floor(Math.max(0, rows.length - 1) / 50) * 50);
     $("#asset-target-rows").replaceChildren(table(["Select", "DNS name / IP", "Confidence / interest", "URLs"], rows.slice(targetPickerOffset, targetPickerOffset + 50), (row, column) => {
@@ -1942,7 +2229,14 @@
     $("#asset-target-next").disabled = targetPickerOffset + 50 >= rows.length;
   }
 
-  $("#asset-target-search").addEventListener("input", () => { targetPickerOffset = 0; renderTargetPicker(); });
+  $("#asset-target-search").addEventListener("input", () => {
+    targetPickerOffset = 0;
+    clearTimeout(targetPickerTimer);
+    targetPickerTimer = setTimeout(renderTargetPicker, 120);
+  });
+  $("#asset-target-dialog").addEventListener("close", () => {
+    if (!$("#asset-target-dialog").open) clearTargetPicker();
+  });
   $("#asset-target-all").addEventListener("click", () => { for (const row of filteredTargetRows()) if (targetEligible(row, settingsModule)) targetPickerDraft.add(row.id); renderTargetPicker(); });
   $("#asset-target-none").addEventListener("click", () => { targetPickerDraft.clear(); renderTargetPicker(); });
   $("#asset-target-save").addEventListener("click", () => { settingsTargetIds = new Set(targetPickerDraft); updateTargetSummary(); $("#asset-target-dialog").close(); });
@@ -2169,11 +2463,12 @@
         $("#scan-error").textContent = "Add and approve DNS names in Scope before Subdomain Enumeration.";
         return;
       }
+      const assetsById = new Map(catalog.items.map((row) => [row.id, row]));
       for (const module of scanModules.filter((item) => selectedModules.has(item.id))) {
         let assetIds;
         if (module.id !== "subdomains") {
           assetIds = module.id === "assets" ? catalog.items.map((row) => row.id) : [...savedTargetIds(module)];
-          const rows = assetIds.map((id) => catalog.items.find((row) => row.id === id));
+          const rows = assetIds.map((id) => assetsById.get(id));
           if (!assetIds.length || rows.some((row) => !row || !targetEligible(row, module))) {
             openScanDialog(module, "settings");
             $("#scan-settings-error").textContent = module.id === "http" ? "Select hosts with collected URLs. Run Web Crawling first if no URLs are available." : "Select and save hosts from Assets before starting this module.";
@@ -2225,7 +2520,8 @@
       scanning = false;
       renderScanModules();
       if (state.projectId === projectId) {
-        try { await loadJobs(); } catch (error) { notice(error.message, "error"); }
+        invalidateJobResults();
+        await refreshAndPoll();
       }
     }
   });
@@ -2243,7 +2539,7 @@
         },
       });
       $("#user-form").reset();
-      await loadAdmin();
+      await reloadAdmin();
     } catch (error) {
       $("#user-error").textContent = error.message;
     }
@@ -2256,30 +2552,35 @@
   let candidatesSearchTimer;
   $("#assets-search").addEventListener("input", (event) => {
     state.assetsQuery = event.target.value;
-    state.assetsOffset = 0;
-    state.assetsRequest++;
-    state.assetsLoading = true;
-    renderAssets();
-    clearTimeout(assetsSearchTimer);
-    assetsSearchTimer = setTimeout(loadAssets, 200);
+    searchAssets();
   });
   for (const [id, key] of [["assets-filter-technology", "technology"], ["assets-filter-provider", "provider"], ["assets-filter-category", "category"]]) {
     $(`#${id}`).addEventListener("input", (event) => {
       state.assetFilters[key] = event.target.value.trim();
-      state.assetsOffset = 0;
-      clearTimeout(assetsSearchTimer);
-      assetsSearchTimer = setTimeout(loadAssets, 200);
+      searchAssets();
     });
   }
   $("#candidates-search").addEventListener("input", (event) => {
     state.candidatesQuery = event.target.value;
     state.candidatesOffset = 0;
-    state.candidatesRequest++;
+    invalidateResources("candidates");
     state.candidatesLoading = true;
-    renderCandidates();
+    updateCandidatesStatus();
     clearTimeout(candidatesSearchTimer);
-    candidatesSearchTimer = setTimeout(loadCandidates, 200);
+    candidatesSearchTimer = setTimeout(() => {
+      if (currentSection() === "assets/candidates") loadCandidates();
+    }, 200);
   });
+  function searchAssets() {
+    state.assetsOffset = 0;
+    invalidateResources("assets");
+    state.assetsLoading = true;
+    updateAssetsStatus();
+    clearTimeout(assetsSearchTimer);
+    assetsSearchTimer = setTimeout(() => {
+      if (currentSection() === "assets/hosts") loadAssets();
+    }, 200);
+  }
   for (const [id, key] of [["candidates-source", "source"], ["candidates-dns", "dns_status"], ["candidates-ip-match", "ip_match"], ["candidates-scope", "scope_status"], ["candidates-confidence", "confidence"], ["candidates-interest", "interest"]]) {
     $(`#${id}`).addEventListener("change", (event) => {
       state.candidateFilters[key] = event.target.value;
@@ -2311,8 +2612,8 @@
       await api(`/api/projects/${encodeURIComponent(row.projectId)}/assets/${encodeURIComponent(row.id)}`, { method: "DELETE" });
       $("#delete-asset-dialog").close();
       if (row.projectId === state.projectId) {
-        await loadAssets();
-        await loadDashboard(false);
+        invalidateResources("assets", "asset-urls", "dashboard", "candidates");
+        await refreshAndPoll();
       }
       notice(row.kind === "host" ? "Host deleted. IP records are preserved." : "IP address deleted.", "info");
     } catch (error) {
@@ -2323,19 +2624,15 @@
       state.assetDeleting = false;
       $("#confirm-delete-asset").disabled = false;
       $("#cancel-delete-asset").disabled = false;
-      renderAssets();
+      if (row.projectId === state.projectId) markForRender(renderAssets);
     }
   });
 
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refreshCurrent();
+    if (document.hidden) stopPolling();
+    else refreshAndPoll();
   });
-
-  state.poll = setInterval(() => {
-    if (document.hidden || !state.projectId) return;
-    if (state.view === "dashboard" || state.view === "scans") refreshCurrent();
-  }, 5000);
 
   boot();
 })();
